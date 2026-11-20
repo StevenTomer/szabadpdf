@@ -14,8 +14,8 @@ android {
         applicationId = "org.szabadpdf"
         minSdk = 26
         targetSdk = 37
-        versionCode = 10
-        versionName = "0.6.3"
+        versionCode = 11
+        versionName = "0.6.4"
     }
     buildFeatures { compose = true }
     // The APK is downloaded directly, so its native libraries are stored compressed: a much

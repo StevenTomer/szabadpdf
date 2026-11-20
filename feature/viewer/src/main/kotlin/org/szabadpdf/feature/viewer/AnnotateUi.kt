@@ -123,13 +123,13 @@ internal fun AnnotateToolbar(
         ) {
             ToolButton(Tool.SELECT, Icons.Filled.TouchApp, "Select", state.tool, onTool)
             ToolButton(Tool.PEN, Icons.Filled.Draw, "Pen", state.tool, onTool, accent = state.pen.color)
+            ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
             ToolButton(Tool.HIGHLIGHTER, Icons.Filled.Brush, "Highlighter pen", state.tool, onTool, accent = state.highlighter.color)
             ToolButton(Tool.TEXT_HIGHLIGHT, Icons.Filled.BorderColor, "Highlight text", state.tool, onTool, accent = state.markupColor)
             ToolButton(Tool.NOTE, Icons.AutoMirrored.Filled.StickyNote2, "Note", state.tool, onTool)
             ToolButton(Tool.TEXT_BOX, Icons.Filled.TextFields, "Text box", state.tool, onTool)
             ToolButton(Tool.SHAPE, shapeIcon(state.shape), "Shape", state.tool, onTool, accent = state.shapeStyle.borderColor)
             ToolButton(Tool.SIGNATURE, Icons.Filled.Gesture, "Signature", state.tool, onTool)
-            ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
             Tip("Pen settings") {
                 IconButton(onClick = onStyle) { Icon(Icons.Filled.Palette, "Pen settings") }
             }
