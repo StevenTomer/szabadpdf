@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -16,6 +18,9 @@ android {
         versionName = "0.5.0"
     }
     buildFeatures { compose = true }
+    // The APK is downloaded directly, so its native libraries are stored compressed: a much
+    // smaller download, unpacked once at install.
+    packaging { jniLibs { useLegacyPackaging = true } }
     // MuPDF, OpenCV and LiteRT are native libraries; one APK per processor type keeps each small.
     // (installDebug picks the right one for the connected device.)
     splits {
@@ -26,8 +31,32 @@ android {
             isUniversalApk = false
         }
     }
+    // Release signing: the key lives outside the repository. Its details are read from
+    // ~/.android-keys/szabadpdf-release.properties (or the file named by the Gradle property
+    // szabadpdf.signing). Without it, release builds are simply left unsigned.
+    val signingFile = (findProperty("szabadpdf.signing") as String?)?.let(::file)
+        ?: file("${System.getProperty("user.home")}/.android-keys/szabadpdf-release.properties")
+    val signing = Properties().apply {
+        if (signingFile.exists()) signingFile.inputStream().use(::load)
+    }
+    signingConfigs {
+        if (signing.isNotEmpty()) {
+            create("release") {
+                storeFile = file(signing.getProperty("storeFile"))
+                storePassword = signing.getProperty("storePassword")
+                keyAlias = signing.getProperty("keyAlias")
+                keyPassword = signing.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
         debug { applicationIdSuffix = ".debug" }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 }
 
