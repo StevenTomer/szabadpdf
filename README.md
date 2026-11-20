@@ -29,21 +29,34 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 
 Minimum Android version: 8.0 (API 26).
 
-## Planned structure
+## Project structure
 
 ```
-app/                  navigation, file picker, recent files
-core/pdf/             Kotlin wrapper around MuPDF (single dedicated thread)
-core/render/          tiled page rendering, bitmap cache, thumbnails
-feature/viewer/       scrolling, zoom, search, text selection
-feature/organize/     page grid: reorder, rotate, delete, insert
-feature/annotate/     annotation tools, undo/redo
-feature/scan/         camera to PDF, behind a swappable interface
+app/                  home screen, recent files, file picker, "Open with" handling
+core/pdf/             Kotlin wrapper around MuPDF: opening, rendering, search, links, outline
+                      (all MuPDF calls run on one dedicated thread)
+feature/viewer/       continuous scrolling, zoom, search, table of contents, go to page
+testdata/             source for the test PDF used by core/pdf's instrumented tests
 ```
+
+Planned: `feature/organize/` (page grid: reorder, rotate, delete, insert), `feature/annotate/`
+(annotation tools, undo/redo) and `feature/scan/` (camera to PDF, behind a swappable interface).
+
+## Building
+
+Requires JDK 21 and the Android SDK (platform 37.2).
+
+```sh
+./gradlew assembleDebug                         # app/build/outputs/apk/debug/app-debug.apk
+./gradlew installDebug                          # install on a connected device or emulator
+./gradlew :core:pdf:connectedDebugAndroidTest   # engine tests (need a device or emulator)
+```
+
+The debug build installs as "org.szabadpdf.debug", alongside any release build.
 
 ## Roadmap
 
-1. Viewer
+1. Viewer (done: scrolling, pinch and double-tap zoom with sharp re-rendering, search, table of contents, links, go to page, recent files)
 2. Page organization, with safe saving (write to a temp file, then swap it in)
 3. Annotations
 4. Scanner

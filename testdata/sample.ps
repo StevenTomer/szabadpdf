@@ -1,0 +1,43 @@
+%!PS
+% Source for the test PDF. Regenerate with:  testdata/make-sample.sh
+% 12 pages; page 6 (index 5) is landscape. Page 3 (index 2) mentions "szabad" twice.
+% Page 1 has an internal link to page 5 and an external link to https://example.org.
+
+[ /Title (SzabadPDF sample) /Author (SzabadPDF tests) /DOCINFO pdfmark
+
+/Helvetica-Bold findfont 36 scalefont /big exch def
+/Helvetica findfont 14 scalefont /body exch def
+
+/para { % y (text) -> draws a line at x=72
+  exch 72 exch moveto show
+} def
+
+1 1 12 {
+  /n exch def
+  n 6 eq { << /PageSize [792 612] >> setpagedevice } { << /PageSize [612 792] >> setpagedevice } ifelse
+  /top n 6 eq { 540 } { 720 } ifelse def
+  big setfont 72 top moveto (Page ) show n 3 string cvs show
+  body setfont
+  top 40 sub (The quick brown fox jumps over the lazy dog.) para
+  top 60 sub (Pack my box with five dozen liquor jugs.) para
+  n 3 eq {
+    top 100 sub (Szabad means free in Hungarian.) para
+    top 120 sub (A szabad szoftver is free software.) para
+  } if
+  n 1 eq {
+    top 100 sub (Go to page 5) para
+    [ /Rect [70 top 104 sub 160 top 86 sub] /Border [0 0 1] /Page 5 /View [/XYZ null null null] /Subtype /Link /LNK pdfmark
+    top 130 sub (Visit example.org) para
+    [ /Rect [70 top 134 sub 190 top 116 sub] /Border [0 0 1] /Action << /Subtype /URI /URI (https://example.org) >> /Subtype /Link /LNK pdfmark
+  } if
+  % A solid black square in the bottom-left corner, used by rendering tests.
+  0 setgray 0 0 72 72 rectfill
+  showpage
+} for
+
+[ /Title (Introduction) /Page 1 /OUT pdfmark
+[ /Title (Chapter One) /Count 2 /Page 3 /OUT pdfmark
+[ /Title (Section 1.1) /Page 3 /OUT pdfmark
+[ /Title (Section 1.2) /Page 4 /OUT pdfmark
+[ /Title (Landscape page) /Page 6 /OUT pdfmark
+[ /Title (The end) /Page 12 /OUT pdfmark
