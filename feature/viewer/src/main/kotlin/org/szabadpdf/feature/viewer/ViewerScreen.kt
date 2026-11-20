@@ -483,6 +483,7 @@ private fun DocumentScreen(
                 versions = versions,
                 fields = fields,
                 shape = annotate.shape,
+                shapeStyle = annotate.shapeStyle,
                 selectionParts = selectionParts,
                 night = night,
             ),
@@ -545,11 +546,19 @@ private fun DocumentScreen(
                 )
                 else -> Column {
                     val canEdit = annotate.editable && onOrganize != null
-                    val barActions = buildList {
-                        if (annotate.dirty) add(BarAction("Save", Icons.Filled.Save) { save() })
-                        add(BarAction("Search", Icons.Filled.Search) { searchOpen = true })
-                        if (annotate.editable) add(BarAction("Annotate", Icons.Filled.Draw) { viewModel.setAnnotating(true) })
-                        tabs?.onOpen?.let { add(BarAction("Open PDFs", Icons.Filled.FolderOpen, it)) }
+                    // Files first, then changing the document; null is a divider.
+                    val barActions = buildList<BarAction?> {
+                        tabs?.onOpen?.let { add(BarAction("Open PDFs", Icons.Filled.FolderOpen, onClick = it)) }
+                        if (annotate.editable) {
+                            add(BarAction("Save", Icons.Filled.Save, enabled = annotate.dirty) { save() })
+                            add(BarAction("Save as…", Icons.Filled.SaveAs) { copyPicker.launch(info.name) })
+                        }
+                        add(BarAction("Print", Icons.Filled.Print) { print() })
+                        add(BarAction("Share", Icons.Filled.Share) { share() })
+                        if (annotate.editable) {
+                            add(null)
+                            add(BarAction("Annotate", Icons.Filled.Draw) { viewModel.setAnnotating(true) })
+                        }
                         if (canEdit) {
                             add(BarAction("Edit pages", Icons.Filled.GridView) {
                                 if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
@@ -561,9 +570,8 @@ private fun DocumentScreen(
                                 else onScanInto?.invoke(currentPage)
                             })
                         }
-                        if (annotate.editable) add(BarAction("Save as…", Icons.Filled.SaveAs) { copyPicker.launch(info.name) })
-                        add(BarAction("Print", Icons.Filled.Print) { print() })
-                        add(BarAction("Share", Icons.Filled.Share) { share() })
+                        add(null)
+                        add(BarAction("Search", Icons.Filled.Search) { searchOpen = true })
                     }
                     ViewerTopBar(
                         title = info.title,
@@ -622,7 +630,7 @@ private fun DocumentScreen(
                 state = annotate,
                 onTool = { tool ->
                     when {
-                        tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT, Tool.SHAPE, Tool.TEXT_BOX) ->
+                        tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT, Tool.SHAPE) ->
                             showStyle = true
                         // Picking the signature tool without a signature, or picking it again: the pad.
                         tool == Tool.SIGNATURE && (signature == null || annotate.tool == Tool.SIGNATURE) -> {
@@ -700,7 +708,7 @@ private fun DocumentScreen(
             onMarkupColor = viewModel::setMarkupColor,
             onFingerDraws = viewModel::setFingerDraws,
             onShape = viewModel::setShape,
-            onTextSize = viewModel::setTextSize,
+            onShapeStyle = viewModel::setShapeStyle,
             onPressure = viewModel::setPressure,
             onDismiss = { showStyle = false },
         )
@@ -731,12 +739,12 @@ private fun DocumentScreen(
     }
 
     newTextBox?.let { box ->
-        NoteDialog(
+        TextBoxDialog(
             initialText = "",
+            initialStyle = annotate.textStyle,
             isNew = true,
-            title = "Text box",
-            onSave = { text ->
-                viewModel.addTextBox(box.page, box.point, text)
+            onSave = { text, style ->
+                viewModel.addTextBox(box.page, box.point, text, style)
                 newTextBox = null
             },
             onDelete = null,
@@ -745,11 +753,31 @@ private fun DocumentScreen(
     }
 
     tapped?.let { t ->
-        if (t.info.kind == AnnotationKind.NOTE || (t.info.kind == AnnotationKind.TEXT_BOX && annotate.editable)) {
+        if (t.info.kind == AnnotationKind.TEXT_BOX && annotate.editable) {
+            val style by produceState<org.szabadpdf.core.pdf.TextBoxStyle?>(null, t) {
+                value = viewModel.textBoxStyle(t.page, t.info.id) ?: annotate.textStyle
+            }
+            style?.let { initial ->
+                TextBoxDialog(
+                    initialText = t.info.contents,
+                    initialStyle = initial,
+                    isNew = false,
+                    onSave = { text, changed ->
+                        viewModel.updateTextBox(t.page, t.info.id, text, changed)
+                        tapped = null
+                    },
+                    onDelete = {
+                        viewModel.deleteAnnotation(t.page, t.info.id)
+                        tapped = null
+                    },
+                    onDismiss = { tapped = null },
+                )
+            }
+        } else if (t.info.kind == AnnotationKind.NOTE) {
             NoteDialog(
                 initialText = t.info.contents,
                 isNew = false,
-                title = if (t.info.kind == AnnotationKind.TEXT_BOX) "Text box" else null,
+                title = null,
                 onSave = { text ->
                     viewModel.setNoteText(t.page, t.info.id, text)
                     tapped = null

@@ -69,6 +69,15 @@ import androidx.compose.ui.window.DialogProperties
 import org.szabadpdf.core.pdf.AnnotationKind
 import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.ShapeKind
+import org.szabadpdf.core.pdf.ShapeStyle
+import org.szabadpdf.core.pdf.TextBoxStyle
+import org.szabadpdf.core.pdf.TextFont
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material3.FilterChip
 import androidx.compose.material.icons.filled.CropSquare
 import androidx.compose.material.icons.filled.TextFields
@@ -80,6 +89,15 @@ private val PenColors = listOf(0x1A1A1A, 0x1E5BD8, 0xD32F2F, 0x2E7D32, 0x7B1FA2,
 private val PenWidths = listOf(0.75f, 1.5f, 3f, 6f)
 private val HighlighterColors = listOf(0xFFEB3B, 0x76FF03, 0x18FFFF, 0xFF80AB, 0xFFAB40)
 private val HighlighterWidths = listOf(8f, 12f, 18f)
+
+/** Text, outline and border colours: the pen's, plus grey and white. */
+private val BoxColors = listOf(0x000000, 0x616161, 0xFFFFFF, 0x1E5BD8, 0xD32F2F, 0x2E7D32, 0x7B1FA2, 0xEF6C00)
+
+/** Fills and text box backgrounds: mostly pale, so what's on top stays readable. */
+private val FillColors = listOf(0xFFFFFF, 0xFFF59D, 0xBBDEFB, 0xC8E6C9, 0xF8BBD0, 0xFFE0B2, 0xE0E0E0, 0x000000)
+
+private val TextSizes = listOf(8f, 9f, 10f, 11f, 12f, 14f, 16f, 18f, 20f, 24f, 28f, 32f, 36f, 48f, 60f, 72f)
+private val BorderWidths = listOf(0.5f, 1f, 2f, 4f)
 
 /** The tool strip shown along the bottom while annotating. */
 @Composable
@@ -109,7 +127,7 @@ internal fun AnnotateToolbar(
             ToolButton(Tool.TEXT_HIGHLIGHT, Icons.Filled.BorderColor, "Highlight text", state.tool, onTool, accent = state.markupColor)
             ToolButton(Tool.NOTE, Icons.AutoMirrored.Filled.StickyNote2, "Note", state.tool, onTool)
             ToolButton(Tool.TEXT_BOX, Icons.Filled.TextFields, "Text box", state.tool, onTool)
-            ToolButton(Tool.SHAPE, shapeIcon(state.shape), "Shape", state.tool, onTool, accent = state.pen.color)
+            ToolButton(Tool.SHAPE, shapeIcon(state.shape), "Shape", state.tool, onTool, accent = state.shapeStyle.borderColor)
             ToolButton(Tool.SIGNATURE, Icons.Filled.Gesture, "Signature", state.tool, onTool)
             ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
             Tip("Pen settings") {
@@ -171,7 +189,7 @@ internal fun StyleSheet(
     onMarkupColor: (Int) -> Unit,
     onFingerDraws: (Boolean) -> Unit,
     onShape: (ShapeKind) -> Unit,
-    onTextSize: (Float) -> Unit,
+    onShapeStyle: (ShapeStyle) -> Unit,
     onPressure: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -188,7 +206,7 @@ internal fun StyleSheet(
             SectionTitle("Text highlight")
             ColorRow(HighlighterColors, state.markupColor, onMarkupColor)
 
-            SectionTitle("Shapes (in the pen's colour and width)")
+            SectionTitle("Shapes")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((kind, label) in listOf(
                     ShapeKind.RECTANGLE to "Box", ShapeKind.ELLIPSE to "Oval", ShapeKind.LINE to "Line", ShapeKind.ARROW to "Arrow",
@@ -196,12 +214,21 @@ internal fun StyleSheet(
                     FilterChip(selected = state.shape == kind, onClick = { onShape(kind) }, label = { Text(label) })
                 }
             }
-
-            SectionTitle("Text boxes")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                for ((size, label) in listOf(10f to "Small", 14f to "Medium", 20f to "Large")) {
-                    FilterChip(selected = state.textSize == size, onClick = { onTextSize(size) }, label = { Text(label) })
-                }
+            val shape = state.shapeStyle
+            val closed = state.shape == ShapeKind.RECTANGLE || state.shape == ShapeKind.ELLIPSE
+            SwitchRow(
+                "Outline",
+                if (closed) "The line around the shape" else "Lines and arrows always have one",
+                checked = shape.border || !closed,
+                enabled = closed,
+            ) { onShapeStyle(shape.copy(border = it)) }
+            if (shape.border || !closed) {
+                ColorRow(BoxColors, shape.borderColor) { onShapeStyle(shape.copy(borderColor = it)) }
+                WidthRow(PenWidths, InkStyle(shape.borderColor, shape.borderWidth)) { onShapeStyle(shape.copy(borderWidth = it)) }
+            }
+            if (closed) {
+                SwitchRow("Fill", "Colour the inside", checked = shape.fill) { onShapeStyle(shape.copy(fill = it)) }
+                if (shape.fill) ColorRow(FillColors, shape.fillColor) { onShapeStyle(shape.copy(fillColor = it)) }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -233,13 +260,29 @@ internal fun StyleSheet(
 }
 
 @Composable
+private fun SwitchRow(title: String, detail: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (detail != null) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
+    }
+}
+
+@Composable
 private fun SectionTitle(text: String) {
     Text(text, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 }
 
 @Composable
 private fun ColorRow(colors: List<Int>, selected: Int, onSelect: (Int) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+    ) {
         for (color in colors) {
             val isSelected = color == selected
             Box(
@@ -643,5 +686,111 @@ internal fun PropertiesDialog(
             TextButton(onClick = { onSave(changed) }, enabled = loaded != null && loaded != changed) { Text("OK") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/**
+ * Writing or changing a text box: its text, then the text's font, size, bold / italic /
+ * underline and colour, and the box's border and background.
+ */
+@Composable
+internal fun TextBoxDialog(
+    initialText: String,
+    initialStyle: TextBoxStyle,
+    isNew: Boolean,
+    onSave: (String, TextBoxStyle) -> Unit,
+    onDelete: (() -> Unit)?,
+    onDismiss: () -> Unit,
+) {
+    var text by rememberSaveable { mutableStateOf(initialText) }
+    var style by remember(initialStyle) { mutableStateOf(initialStyle) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (isNew) "New text box" else "Text box") },
+        text = {
+            Column(
+                Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontFamily = when (style.font) {
+                            TextFont.SANS -> androidx.compose.ui.text.font.FontFamily.SansSerif
+                            TextFont.SERIF -> androidx.compose.ui.text.font.FontFamily.Serif
+                            TextFont.MONO -> androidx.compose.ui.text.font.FontFamily.Monospace
+                        },
+                        fontWeight = if (style.bold) androidx.compose.ui.text.font.FontWeight.Bold else null,
+                        fontStyle = if (style.italic) androidx.compose.ui.text.font.FontStyle.Italic else null,
+                        textDecoration = if (style.underline) androidx.compose.ui.text.style.TextDecoration.Underline else null,
+                        color = rgbColor(style.color),
+                        fontSize = androidx.compose.ui.unit.TextUnit(style.size.coerceIn(10f, 28f), androidx.compose.ui.unit.TextUnitType.Sp),
+                    ),
+                    colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                        // The text is shown on what it will sit on: the background colour or white paper.
+                        focusedContainerColor = if (style.background) rgbColor(style.backgroundColor) else Color.White,
+                        unfocusedContainerColor = if (style.background) rgbColor(style.backgroundColor) else Color.White,
+                    ),
+                )
+
+                SectionTitle("Text")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for ((font, label) in listOf(TextFont.SANS to "Sans", TextFont.SERIF to "Serif", TextFont.MONO to "Mono")) {
+                        FilterChip(selected = style.font == font, onClick = { style = style.copy(font = font) }, label = { Text(label) })
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    @Composable
+                    fun Toggle(on: Boolean, icon: ImageVector, label: String, set: (Boolean) -> Unit) {
+                        Tip(label) {
+                            androidx.compose.material3.FilledIconToggleButton(checked = on, onCheckedChange = set) { Icon(icon, label) }
+                        }
+                    }
+                    Toggle(style.bold, Icons.Filled.FormatBold, "Bold") { style = style.copy(bold = it) }
+                    Toggle(style.italic, Icons.Filled.FormatItalic, "Italic") { style = style.copy(italic = it) }
+                    Toggle(style.underline, Icons.Filled.FormatUnderlined, "Underline") { style = style.copy(underline = it) }
+                    Spacer(Modifier.weight(1f))
+                    val sizeIndex = TextSizes.indexOfFirst { it >= style.size }.let { if (it < 0) TextSizes.lastIndex else it }
+                    Tip("Smaller") {
+                        IconButton(onClick = { style = style.copy(size = TextSizes[(sizeIndex - 1).coerceAtLeast(0)]) }, enabled = sizeIndex > 0) {
+                            Icon(Icons.Filled.Remove, "Smaller")
+                        }
+                    }
+                    Text("${style.size.toInt()} pt", style = MaterialTheme.typography.bodyLarge)
+                    Tip("Bigger") {
+                        IconButton(
+                            onClick = { style = style.copy(size = TextSizes[(sizeIndex + 1).coerceAtMost(TextSizes.lastIndex)]) },
+                            enabled = sizeIndex < TextSizes.lastIndex,
+                        ) { Icon(Icons.Filled.Add, "Bigger") }
+                    }
+                }
+                ColorRow(BoxColors, style.color) { style = style.copy(color = it) }
+
+                SectionTitle("Box")
+                SwitchRow("Border", null, checked = style.border) { style = style.copy(border = it) }
+                if (style.border) {
+                    ColorRow(BoxColors, style.borderColor) { style = style.copy(borderColor = it) }
+                    WidthRow(BorderWidths, InkStyle(style.borderColor, style.borderWidth)) { style = style.copy(borderWidth = it) }
+                }
+                SwitchRow(
+                    "Background",
+                    if (style.background) null else "Transparent: the page shows through",
+                    checked = style.background,
+                ) { style = style.copy(background = it) }
+                if (style.background) ColorRow(FillColors, style.backgroundColor) { style = style.copy(backgroundColor = it) }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text.trimEnd(), style) }, enabled = text.isNotBlank()) { Text(if (isNew) "Add" else "Save") }
+        },
+        dismissButton = {
+            Row {
+                if (onDelete != null) TextButton(onClick = onDelete) { Text("Delete") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
     )
 }

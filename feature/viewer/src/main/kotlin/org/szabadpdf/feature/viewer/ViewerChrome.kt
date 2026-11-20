@@ -357,8 +357,15 @@ internal fun ThumbnailStrip(
 
 internal val ThumbWidth = 48.dp
 
+private val DividerWidth = 7.dp
+
 /** A button in the viewer's top bar. */
-internal class BarAction(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
+internal class BarAction(
+    val label: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
 
 /**
  * The viewer's top bar: back, the title when there's room, and every action as an icon (names
@@ -369,14 +376,17 @@ internal class BarAction(val label: String, val icon: androidx.compose.ui.graphi
 internal fun ViewerTopBar(
     title: String,
     onBack: () -> Unit,
-    actions: List<BarAction>,
+    /** The buttons in order; null puts a divider between groups. */
+    actions: List<BarAction?>,
     colors: androidx.compose.material3.TopAppBarColors,
     more: @Composable (buttonSize: androidx.compose.ui.unit.Dp) -> Unit,
 ) {
     androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val count = actions.size + 2 // with back and the menu
-        val available = maxWidth - 8.dp
-        val button = (available / count).coerceIn(36.dp, 48.dp)
+        val count = actions.count { it != null } + 2 // with back and the menu
+        val dividers = actions.count { it == null }
+        // The bar keeps 4dp at each end, and a little between the back button and the rest.
+        val available = maxWidth - 16.dp - DividerWidth * dividers
+        val button = (available / count).coerceIn(32.dp, 48.dp)
         val titleRoom = available - button * count
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
@@ -394,8 +404,17 @@ internal fun ViewerTopBar(
                 },
                 actions = {
                     for (action in actions) {
+                        if (action == null) {
+                            androidx.compose.material3.VerticalDivider(
+                                Modifier.height(24.dp).padding(horizontal = (DividerWidth - 1.dp) / 2),
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            continue
+                        }
                         Tip(action.label) {
-                            IconButton(onClick = action.onClick, modifier = Modifier.size(button)) { Icon(action.icon, action.label) }
+                            IconButton(onClick = action.onClick, enabled = action.enabled, modifier = Modifier.size(button)) {
+                                Icon(action.icon, action.label)
+                            }
                         }
                     }
                     more(button)

@@ -71,6 +71,7 @@ import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.PageSize
 import org.szabadpdf.core.pdf.PdfPoint
 import org.szabadpdf.core.pdf.ShapeKind
+import org.szabadpdf.core.pdf.ShapeStyle
 import org.szabadpdf.core.pdf.TextSelection
 import kotlin.math.ceil
 import kotlin.math.max
@@ -109,6 +110,7 @@ internal class AnnotationLayer(
     val versions: PageVersions,
     val fields: Map<Int, List<FormField>> = emptyMap(),
     val shape: ShapeKind = ShapeKind.RECTANGLE,
+    val shapeStyle: ShapeStyle = ShapeStyle(),
     /** Inverted page colours. */
     val night: Boolean = false,
     /** The selection page by page, when it runs over several. */
@@ -664,7 +666,7 @@ private fun PageItem(
             val style = layer.inkStyle
             if (style != null && liveStroke.isNotEmpty()) drawInk(liveStroke, style, k)
             val shape = liveShape
-            if (style != null && shape != null) drawShapePreview(layer.shape, shape.first, shape.second, style, k)
+            if (style != null && shape != null) drawShapePreview(layer.shape, shape.first, shape.second, layer.shapeStyle, k)
             eraserAt?.let {
                 val r = EraserRadius.toPx() / zoom.scale
                 drawCircle(Color(0x33000000), r, it)
@@ -693,14 +695,21 @@ private fun handlePositions(selection: TextSelection, pxPerPt: Float, radius: Fl
         Offset(last.right * pxPerPt, last.bottom * pxPerPt + radius)
 }
 
-private fun DrawScope.drawShapePreview(kind: ShapeKind, a: Offset, b: Offset, style: InkStyle, pxPerPt: Float) {
-    val color = Color(0xFF000000.toInt() or style.color).copy(alpha = style.opacity)
-    val stroke = Stroke(style.width * pxPerPt, cap = StrokeCap.Round, join = StrokeJoin.Round)
+private fun DrawScope.drawShapePreview(kind: ShapeKind, a: Offset, b: Offset, style: ShapeStyle, pxPerPt: Float) {
+    val color = Color(0xFF000000.toInt() or style.borderColor)
+    val fill = Color(0xFF000000.toInt() or style.fillColor)
+    val stroke = Stroke(style.borderWidth * pxPerPt, cap = StrokeCap.Round, join = StrokeJoin.Round)
     val topLeft = Offset(minOf(a.x, b.x), minOf(a.y, b.y))
     val size = Size(kotlin.math.abs(b.x - a.x), kotlin.math.abs(b.y - a.y))
     when (kind) {
-        ShapeKind.RECTANGLE -> drawRect(color, topLeft, size, style = stroke)
-        ShapeKind.ELLIPSE -> drawOval(color, topLeft, size, style = stroke)
+        ShapeKind.RECTANGLE -> {
+            if (style.fill) drawRect(fill, topLeft, size)
+            if (style.border) drawRect(color, topLeft, size, style = stroke)
+        }
+        ShapeKind.ELLIPSE -> {
+            if (style.fill) drawOval(fill, topLeft, size)
+            if (style.border) drawOval(color, topLeft, size, style = stroke)
+        }
         ShapeKind.LINE, ShapeKind.ARROW -> {
             drawLine(color, a, b, stroke.width, StrokeCap.Round)
             if (kind == ShapeKind.ARROW) {

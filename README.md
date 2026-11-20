@@ -9,8 +9,10 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 - View PDFs page by page or continuously: zoom, search, table of contents, links, page
   thumbnails, night mode; several documents open in tabs (drag to reorder); tooltips on icons
   when a stylus hovers
-- Annotate: pen (pressure-sensitive with a stylus) and highlighter, text boxes, rectangles, ovals,
-  lines and arrows, highlight/underline/strikeout (also across pages), notes; undo/redo
+- Annotate: pen (pressure-sensitive with a stylus) and highlighter, an eraser that rubs out just
+  what it passes over, text boxes (font, size, bold/italic/underline, colour, border, background),
+  rectangles and ovals (outline and fill) and lines and arrows, highlight/underline/strikeout
+  (also across pages), notes; undo/redo
 - Sign with a saved drawn signature; fill in forms (text, checkboxes, radio buttons, lists)
 - Unsaved changes survive the app being closed (kept as a draft and offered back)
 - Password protection: add, change or remove an AES-256 open password

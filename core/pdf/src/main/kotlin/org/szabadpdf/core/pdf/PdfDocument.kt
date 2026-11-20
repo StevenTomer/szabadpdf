@@ -9,6 +9,7 @@ import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import com.artifex.mupdf.fitz.DisplayList
 import com.artifex.mupdf.fitz.Document
+import com.artifex.mupdf.fitz.Font
 import com.artifex.mupdf.fitz.Link
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Outline
@@ -381,45 +382,61 @@ class PdfDocument private constructor(
         }
     }
 
-    /**
-     * Adds a text box with its top-left corner at [at]: [text] in Helvetica of [fontSize] points
-     * and [color], sized to fit (kept within the page).
-     */
-    suspend fun addTextBox(index: Int, at: PdfPoint, text: String, fontSize: Float, color: Int): EditState = onEngine {
-        val pageWidth = bounds[index].let { it.x1 - it.x0 }
-        val lines = text.lines()
-        val width = (lines.maxOf { it.length } * fontSize * 0.55f + fontSize).coerceIn(fontSize * 3, pageWidth - at.x)
-        val height = lines.size * fontSize * 1.25f + fontSize * 0.5f
+    /** Adds a text box with its top-left corner at [at], sized to fit [text] (kept within the page). */
+    suspend fun addTextBox(index: Int, at: PdfPoint, text: String, style: TextBoxStyle): EditState = onEngine {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be annotated")
         edit(index, "Text box") { page ->
-            val p = toPage(index, at)
             val annot = page.createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
-            annot.setRect(Rect(p.x, p.y, p.x + width, p.y + height))
-            annot.setDefaultAppearance("Helv", fontSize, rgb(color))
-            annot.setContents(text)
-            annot.setBorderWidth(0f)
-            annot.update()
+            writeTextBox(pdf, index, annot, toPage(index, at), text, style)
         }
     }
 
-    /** Adds a rectangle, ellipse, line or arrow from [start] to [end], drawn with [style]. */
-    suspend fun addShape(index: Int, kind: ShapeKind, start: PdfPoint, end: PdfPoint, style: InkStyle): EditState = onEngine {
+    /** Changes text box [id]'s text and look; its top-left corner stays where it is. */
+    suspend fun updateTextBox(index: Int, id: Int, text: String, style: TextBoxStyle): EditState = onEngine {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be annotated")
+        edit(index, "Edit text box") { page ->
+            val annot = find(page, id) ?: return@edit
+            val r = annot.rect
+            writeTextBox(pdf, index, annot, Point(minOf(r.x0, r.x1), minOf(r.y0, r.y1)), text, style)
+        }
+    }
+
+    /** How text box [id] looks (as SzabadPDF made it; other text boxes get the defaults, at their size). */
+    suspend fun textBoxStyle(index: Int, id: Int): TextBoxStyle? = onEngine {
+        val page = doc.loadPage(index) as? PDFPage ?: return@onEngine null
+        try {
+            val annot = find(page, id) ?: return@onEngine null
+            readTextBoxStyle(annot)
+        } finally {
+            page.destroy()
+        }
+    }
+
+    /** Adds a rectangle, ellipse, line or arrow from [start] to [end]. */
+    suspend fun addShape(index: Int, kind: ShapeKind, start: PdfPoint, end: PdfPoint, style: ShapeStyle): EditState = onEngine {
         edit(index, "Shape") { page ->
             val a = toPage(index, start)
             val b = toPage(index, end)
-            val annot = when (kind) {
-                ShapeKind.RECTANGLE, ShapeKind.ELLIPSE -> page.createAnnotation(
-                    if (kind == ShapeKind.RECTANGLE) PDFAnnotation.TYPE_SQUARE else PDFAnnotation.TYPE_CIRCLE,
-                ).apply {
+            val closed = kind == ShapeKind.RECTANGLE || kind == ShapeKind.ELLIPSE
+            val annot = if (closed) {
+                page.createAnnotation(if (kind == ShapeKind.RECTANGLE) PDFAnnotation.TYPE_SQUARE else PDFAnnotation.TYPE_CIRCLE).apply {
                     setRect(Rect(minOf(a.x, b.x), minOf(a.y, b.y), maxOf(a.x, b.x), maxOf(a.y, b.y)))
+                    if (style.fill) setInteriorColor(rgb(style.fillColor))
                 }
-                ShapeKind.LINE, ShapeKind.ARROW -> page.createAnnotation(PDFAnnotation.TYPE_LINE).apply {
+            } else {
+                page.createAnnotation(PDFAnnotation.TYPE_LINE).apply {
                     setLine(a, b)
                     if (kind == ShapeKind.ARROW) setLineEndingStyles(PDFAnnotation.LINE_ENDING_NONE, PDFAnnotation.LINE_ENDING_OPEN_ARROW)
                 }
             }
-            annot.setColor(rgb(style.color))
-            annot.setBorderWidth(style.width)
-            if (style.opacity < 1f) annot.setOpacity(style.opacity)
+            if (style.border || !closed) {
+                annot.setColor(rgb(style.borderColor))
+                annot.setBorderWidth(style.borderWidth)
+            } else {
+                // No outline: no stroke colour, so only the fill is drawn.
+                annot.setColor(FloatArray(0))
+                annot.setBorderWidth(0f)
+            }
             annot.update()
         }
     }
@@ -438,23 +455,94 @@ class PdfDocument private constructor(
     }
 
     /**
-     * Deletes ink strokes passing within [radius] points of the eraser path [points]. Calls
-     * with the same [gesture] are undone together. Returns null if nothing was erased.
+     * Rubs out the parts of ink strokes within [radius] points of the eraser path [points], the
+     * way a real eraser does: a stroke crossed in the middle becomes two. Calls with the same
+     * [gesture] are undone together. Returns null if nothing was erased.
      */
     suspend fun erase(index: Int, points: List<PdfPoint>, radius: Float, gesture: Int): EditState? = onEngine {
+        val eraser = points.map { toPage(index, it) }
+        if (eraser.isEmpty()) return@onEngine null
         val page = doc.loadPage(index) as? PDFPage ?: return@onEngine null
-        val hits = try {
-            val eraser = points.map { toPage(index, it) }
-            page.annotations.orEmpty()
-                .filter { it.type == PDFAnnotation.TYPE_INK && touches(it, eraser, radius) }
-                .map { it.`object`.asIndirect() }
+        // Annotation -> its strokes after erasing (empty: nothing left of it).
+        val changes = try {
+            page.annotations.orEmpty().filter { it.type == PDFAnnotation.TYPE_INK }.mapNotNull { annot ->
+                val reach = radius + annot.borderWidth / 2f
+                val box = annot.bounds
+                if (eraser.none { it.x >= box.x0 - reach && it.x <= box.x1 + reach && it.y >= box.y0 - reach && it.y <= box.y1 + reach }) {
+                    return@mapNotNull null
+                }
+                var changed = false
+                val strokes = annot.inkList.orEmpty().flatMap { stroke ->
+                    val pieces = rubOut(stroke.toList(), eraser, reach)
+                    if (pieces == null) listOf(stroke.toList()) else {
+                        changed = true
+                        pieces
+                    }
+                }
+                if (changed) annot.`object`.asIndirect() to strokes else null
+            }
         } finally {
             page.destroy()
         }
-        if (hits.isEmpty()) return@onEngine null
+        if (changes.isEmpty()) return@onEngine null
         edit(index, "Erase", group = "Erase#$gesture") { p ->
-            hits.forEach { id -> find(p, id)?.let(p::deleteAnnotation) }
+            for ((id, strokes) in changes) {
+                val annot = find(p, id) ?: continue
+                if (strokes.isEmpty()) {
+                    p.deleteAnnotation(annot)
+                } else {
+                    annot.setInkList(strokes.map { it.toTypedArray() }.toTypedArray())
+                    annot.update()
+                }
+            }
         }
+    }
+
+    /**
+     * What's left of [stroke] after rubbing out everything within [reach] of the [eraser] path,
+     * as separate pieces; or null if the eraser didn't touch it.
+     */
+    private fun rubOut(stroke: List<Point>, eraser: List<Point>, reach: Float): List<List<Point>>? {
+        if (stroke.isEmpty()) return null
+        // Points close enough together that the eraser can't slip between them.
+        val step = (reach / 2f).coerceAtLeast(0.25f)
+        val dense = ArrayList<Point>(stroke.size * 2)
+        dense += stroke[0]
+        for (k in 1 until stroke.size) {
+            val a = stroke[k - 1]
+            val b = stroke[k]
+            val length = kotlin.math.hypot(b.x - a.x, b.y - a.y)
+            val parts = kotlin.math.ceil(length / step).toInt().coerceAtLeast(1)
+            for (n in 1..parts) {
+                val t = n.toFloat() / parts
+                dense += Point(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+            }
+        }
+        fun rubbed(p: Point): Boolean {
+            if (eraser.size == 1) return kotlin.math.hypot(p.x - eraser[0].x, p.y - eraser[0].y) <= reach
+            for (e in 1 until eraser.size) if (pointToSegment(p, eraser[e - 1], eraser[e]) <= reach) return true
+            return false
+        }
+        val gone = dense.map(::rubbed)
+        if (gone.none { it }) return null
+        val pieces = mutableListOf<List<Point>>()
+        var run = mutableListOf<Point>()
+        dense.forEachIndexed { k, p ->
+            if (gone[k]) {
+                if (run.size >= 2) pieces += run
+                run = mutableListOf()
+            } else run += p
+        }
+        if (run.size >= 2) pieces += run
+        return pieces
+    }
+
+    private fun pointToSegment(p: Point, a: Point, b: Point): Float {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val lengthSq = dx * dx + dy * dy
+        val t = if (lengthSq == 0f) 0f else (((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq).coerceIn(0f, 1f)
+        return kotlin.math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
     // --- recognizing text on existing pages -------------------------------------------------
@@ -700,6 +788,127 @@ class PdfDocument private constructor(
 
     private fun fromPage(index: Int, x: Float, y: Float): PdfPoint = bounds[index].let { PdfPoint(x - it.x0, y - it.y0) }
 
+    /** Fonts (and their embedded copies in this document) used by text boxes, by name. */
+    private val boxFonts = HashMap<String, Pair<Font, PDFObject>>()
+
+    private fun boxFont(pdf: PDFDocument, style: TextBoxStyle): Pair<Font, PDFObject> {
+        val name = baseFontName(style)
+        return boxFonts.getOrPut(name) {
+            val font = Font(name)
+            // Embedded as a Unicode font, so accented letters (ő, ű...) work and the text can be searched.
+            font to pdf.addFont(font)
+        }
+    }
+
+    /**
+     * Makes [annot] a text box showing [text] in [style], with its top-left corner at [topLeft]
+     * (page space). Its look is drawn here (MuPDF's own can't do bold, italic, underline or
+     * fills), and the style is kept in the annotation so it can be edited later.
+     */
+    private fun writeTextBox(pdf: PDFDocument, index: Int, annot: PDFAnnotation, topLeft: Point, text: String, style: TextBoxStyle) {
+        val (font, fontRef) = boxFont(pdf, style)
+        val lines = text.lines()
+        fun widthOf(line: String) = line.codePoints().toArray().sumOf { cp ->
+            font.advanceGlyph(font.encodeCharacter(cp), false).toDouble()
+        }.toFloat() * style.size
+        val border = if (style.border) style.borderWidth else 0f
+        val pad = 4f + border
+        val lineHeight = style.size * 1.2f
+        val page = bounds[index]
+        val width = (lines.maxOf(::widthOf) + pad * 2).coerceIn(style.size * 2, (page.x1 - topLeft.x).coerceAtLeast(style.size * 2))
+        val height = lines.size * lineHeight + pad * 2
+
+        // Basic, standard description too, for other PDF readers that redraw text boxes themselves.
+        annot.setRect(Rect(topLeft.x, topLeft.y, topLeft.x + width, topLeft.y + height))
+        annot.setContents(text)
+        annot.setDefaultAppearance(
+            when (style.font) { TextFont.SANS -> "Helv"; TextFont.SERIF -> "TiRo"; TextFont.MONO -> "Cour" },
+            style.size,
+            rgb(style.color),
+        )
+        annot.setBorderWidth(border)
+        annot.update()
+
+        // The appearance: background, border, then the text, in the box's own coordinates (y up).
+        fun c(color: Int) = rgb(color).joinToString(" ") { "%.3f".format(java.util.Locale.ROOT, it) }
+        fun n(v: Float) = "%.2f".format(java.util.Locale.ROOT, v)
+        val ops = StringBuilder("q\n")
+        if (style.background) ops.append("${c(style.backgroundColor)} rg 0 0 ${n(width)} ${n(height)} re f\n")
+        if (style.border && border > 0f) {
+            ops.append("${c(style.borderColor)} RG ${n(border)} w ${n(border / 2)} ${n(border / 2)} ${n(width - border)} ${n(height - border)} re S\n")
+        }
+        ops.append("BT /F1 ${n(style.size)} Tf ${c(style.color)} rg\n")
+        lines.forEachIndexed { k, line ->
+            val baseline = height - pad - style.size * 0.9f - k * lineHeight
+            val glyphs = line.codePoints().toArray().joinToString("") { "%04x".format(font.encodeCharacter(it)) }
+            ops.append("1 0 0 1 ${n(pad)} ${n(baseline)} Tm <$glyphs> Tj\n")
+        }
+        ops.append("ET\n")
+        if (style.underline) {
+            ops.append("${c(style.color)} RG ${n(style.size / 16f)} w\n")
+            lines.forEachIndexed { k, line ->
+                if (line.isBlank()) return@forEachIndexed
+                val y = height - pad - style.size * 0.9f - k * lineHeight - style.size * 0.12f
+                ops.append("${n(pad)} ${n(y)} m ${n(pad + widthOf(line))} ${n(y)} l S\n")
+            }
+        }
+        ops.append("Q\n")
+
+        val resources = pdf.newDictionary()
+        resources.put("Font", pdf.newDictionary().also { it.put("F1", fontRef) })
+        val form = pdf.newDictionary()
+        form.put("Type", pdf.newName("XObject"))
+        form.put("Subtype", pdf.newName("Form"))
+        form.put("BBox", pdf.newArray().also { a -> listOf(0f, 0f, width, height).forEach { a.push(it) } })
+        form.put("Resources", resources)
+        val ap = pdf.newDictionary()
+        ap.put("N", pdf.addStream(ops.toString(), form))
+        val obj = annot.`object`
+        obj.put("AP", ap)
+        // Background colour, as PDF readers expect it for text boxes.
+        if (style.background) obj.put("C", pdf.newArray().also { a -> rgb(style.backgroundColor).forEach { a.push(it) } })
+        else obj.delete("C")
+
+        val kept = pdf.newDictionary()
+        kept.put("Font", style.font.ordinal)
+        kept.put("Size", style.size)
+        kept.put("Bold", style.bold)
+        kept.put("Italic", style.italic)
+        kept.put("Underline", style.underline)
+        kept.put("Color", style.color)
+        kept.put("Border", style.border)
+        kept.put("BorderWidth", style.borderWidth)
+        kept.put("BorderColor", style.borderColor)
+        kept.put("Background", style.background)
+        kept.put("BackgroundColor", style.backgroundColor)
+        obj.put(STYLE_KEY, kept)
+    }
+
+    private fun readTextBoxStyle(annot: PDFAnnotation): TextBoxStyle {
+        val kept = annot.`object`.get(STYLE_KEY)
+        val d = TextBoxStyle()
+        if (kept.isNull) {
+            val size = runCatching { annot.defaultAppearance?.size }.getOrNull()?.takeIf { it > 0f } ?: d.size
+            return d.copy(size = size)
+        }
+        fun int(key: String, default: Int) = kept.get(key).let { if (it.isNull) default else it.asInteger() }
+        fun float(key: String, default: Float) = kept.get(key).let { if (it.isNull) default else it.asFloat() }
+        fun bool(key: String, default: Boolean) = kept.get(key).let { if (it.isNull) default else it.asBoolean() }
+        return TextBoxStyle(
+            font = TextFont.entries.getOrElse(int("Font", 0)) { TextFont.SANS },
+            size = float("Size", d.size),
+            bold = bool("Bold", false),
+            italic = bool("Italic", false),
+            underline = bool("Underline", false),
+            color = int("Color", d.color),
+            border = bool("Border", false),
+            borderWidth = float("BorderWidth", d.borderWidth),
+            borderColor = int("BorderColor", d.borderColor),
+            background = bool("Background", false),
+            backgroundColor = int("BackgroundColor", d.backgroundColor),
+        )
+    }
+
     /** Runs one undoable change to page [index] and refreshes what's cached for it. */
     private fun edit(index: Int, label: String, group: String? = null, block: (PDFPage) -> Unit): EditState {
         val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be annotated")
@@ -775,50 +984,6 @@ class PdfDocument private constructor(
             bounds = PdfRect(b.x0 - o.x0, b.y0 - o.y0, b.x1 - o.x0, b.y1 - o.y0),
             contents = runCatching { contents }.getOrNull().orEmpty(),
         )
-    }
-
-    /** Whether any ink stroke of [annot] passes within reach of the eraser path (a polyline). */
-    private fun touches(annot: PDFAnnotation, eraser: List<Point>, radius: Float): Boolean {
-        val reach = radius + annot.borderWidth / 2f
-        val box = annot.bounds
-        if (eraser.none { it.x >= box.x0 - reach && it.x <= box.x1 + reach && it.y >= box.y0 - reach && it.y <= box.y1 + reach }) {
-            return false
-        }
-        for (stroke in annot.inkList.orEmpty()) {
-            for (i in stroke.indices) {
-                val a = stroke[i]
-                val b = stroke[minOf(i + 1, stroke.size - 1)]
-                for (j in eraser.indices) {
-                    val c = eraser[j]
-                    val d = eraser[minOf(j + 1, eraser.size - 1)]
-                    if (segmentDistance(a, b, c, d) <= reach) return true
-                }
-            }
-        }
-        return false
-    }
-
-    private fun segmentDistance(a: Point, b: Point, c: Point, d: Point): Float {
-        fun cross(o: Point, p: Point, q: Point) = (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x)
-        val d1 = cross(c, d, a)
-        val d2 = cross(c, d, b)
-        val d3 = cross(a, b, c)
-        val d4 = cross(a, b, d)
-        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0f
-        return minOf(
-            minOf(distanceToSegment(a, c, d), distanceToSegment(b, c, d)),
-            minOf(distanceToSegment(c, a, b), distanceToSegment(d, a, b)),
-        )
-    }
-
-    private fun distanceToSegment(p: Point, a: Point, b: Point): Float {
-        val dx = b.x - a.x
-        val dy = b.y - a.y
-        val lengthSq = dx * dx + dy * dy
-        val t = if (lengthSq == 0f) 0f else (((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq).coerceIn(0f, 1f)
-        val x = a.x + t * dx - p.x
-        val y = a.y + t * dy - p.y
-        return kotlin.math.sqrt(x * x + y * y)
     }
 
     /**
@@ -1129,3 +1294,23 @@ private fun fmt(f: Float): String = if (f == f.toInt().toFloat()) f.toInt().toSt
 
 private const val INFO_SUBJECT = "info:Subject"
 private const val INFO_KEYWORDS = "info:Keywords"
+
+/** Where a text box's style is kept, for editing it later. */
+private const val STYLE_KEY = "SzabadPDFStyle"
+
+/** The standard PDF font for a text box style, e.g. "Times-BoldItalic". */
+private fun baseFontName(style: TextBoxStyle): String {
+    val family = when (style.font) {
+        TextFont.SANS -> "Helvetica"
+        TextFont.SERIF -> "Times"
+        TextFont.MONO -> "Courier"
+    }
+    val slant = if (style.font == TextFont.SERIF) "Italic" else "Oblique"
+    return when {
+        style.bold && style.italic -> "$family-Bold$slant"
+        style.bold -> "$family-Bold"
+        style.italic -> "$family-$slant"
+        style.font == TextFont.SERIF -> "Times-Roman"
+        else -> family
+    }
+}

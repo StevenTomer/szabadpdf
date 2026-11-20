@@ -102,3 +102,36 @@ data class DocumentProperties(
     val subject: String = "",
     val keywords: String = "",
 )
+
+enum class TextFont { SANS, SERIF, MONO }
+
+/**
+ * How a text box looks: the text's [font], [size] (points), weight, slant, underline and
+ * [color]; an optional border ([borderWidth] points, [borderColor]); and an optional
+ * background fill (otherwise the page shows through). Colours are 0xRRGGBB.
+ */
+data class TextBoxStyle(
+    val font: TextFont = TextFont.SANS,
+    val size: Float = 14f,
+    val bold: Boolean = false,
+    val italic: Boolean = false,
+    val underline: Boolean = false,
+    val color: Int = 0x000000,
+    val border: Boolean = false,
+    val borderWidth: Float = 1f,
+    val borderColor: Int = 0x000000,
+    val background: Boolean = false,
+    val backgroundColor: Int = 0xFFFFFF,
+)
+
+/**
+ * How a rectangle, oval, line or arrow looks: its outline ([border], [borderWidth] points,
+ * [borderColor]) and, for rectangles and ovals, an optional [fill]. Lines always show their outline.
+ */
+data class ShapeStyle(
+    val border: Boolean = true,
+    val borderColor: Int = 0x000000,
+    val borderWidth: Float = 1.5f,
+    val fill: Boolean = false,
+    val fillColor: Int = 0xFFF59D,
+)

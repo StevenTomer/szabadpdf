@@ -25,6 +25,9 @@ import org.szabadpdf.core.pdf.LinkTarget
 import org.szabadpdf.core.pdf.MarkupKind
 import org.szabadpdf.core.pdf.PdfPoint
 import org.szabadpdf.core.pdf.ShapeKind
+import org.szabadpdf.core.pdf.ShapeStyle
+import org.szabadpdf.core.pdf.TextBoxStyle
+import org.szabadpdf.core.pdf.TextFont
 import org.szabadpdf.core.pdf.TextSelection
 import org.szabadpdf.core.pdf.OutlineEntry
 import org.szabadpdf.core.pdf.PageSize
@@ -100,7 +103,9 @@ data class AnnotateState(
     /** When off, only a stylus draws and fingers scroll. Turned off the first time a stylus is used. */
     val fingerDraws: Boolean = true,
     val shape: ShapeKind = ShapeKind.RECTANGLE,
-    val textSize: Float = 14f,
+    val shapeStyle: ShapeStyle = ShapeStyle(),
+    /** How new text boxes look (the last style used). */
+    val textStyle: TextBoxStyle = TextBoxStyle(),
     /** A pen's pressure sets each stroke's width (light strokes thinner, firm ones thicker). */
     val pressure: Boolean = true,
     val edits: EditState = EditState(),
@@ -498,18 +503,26 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
 
     fun setShape(kind: ShapeKind) = updatePrefs { it.copy(shape = kind) }
 
-    fun setTextSize(size: Float) = updatePrefs { it.copy(textSize = size) }
+    fun setShapeStyle(style: ShapeStyle) = updatePrefs { it.copy(shapeStyle = style) }
 
     fun setPressure(enabled: Boolean) = updatePrefs { it.copy(pressure = enabled) }
 
-    fun addTextBox(page: Int, at: PdfPoint, text: String) {
-        val s = _annotate.value
-        editPage(page, "Couldn't add the text box") { it.addTextBox(page, at, text, s.textSize, s.pen.color) }
+    fun addTextBox(page: Int, at: PdfPoint, text: String, style: TextBoxStyle) {
+        updatePrefs { it.copy(textStyle = style) }
+        editPage(page, "Couldn't add the text box") { it.addTextBox(page, at, text, style) }
     }
+
+    fun updateTextBox(page: Int, id: Int, text: String, style: TextBoxStyle) {
+        updatePrefs { it.copy(textStyle = style) }
+        editPage(page, "Couldn't change the text box") { it.updateTextBox(page, id, text, style) }
+    }
+
+    suspend fun textBoxStyle(page: Int, id: Int): TextBoxStyle? =
+        document?.let { doc -> runCatching { doc.textBoxStyle(page, id) }.getOrNull() }
 
     fun addShape(page: Int, start: PdfPoint, end: PdfPoint) {
         val s = _annotate.value
-        editPage(page, "Couldn't add the shape") { it.addShape(page, s.shape, start, end, s.pen) }
+        editPage(page, "Couldn't add the shape") { it.addShape(page, s.shape, start, end, s.shapeStyle) }
     }
 
     /** The first time a stylus is used, let fingers scroll instead of draw. */
@@ -992,7 +1005,20 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             .putInt("markup_color", s.markupColor)
             .putBoolean("finger_draws", s.fingerDraws)
             .putString("shape", s.shape.name)
-            .putFloat("text_size", s.textSize)
+            .putString("shape_style", s.shapeStyle.let {
+                org.json.JSONObject()
+                    .put("border", it.border).put("borderColor", it.borderColor).put("borderWidth", it.borderWidth.toDouble())
+                    .put("fill", it.fill).put("fillColor", it.fillColor)
+                    .toString()
+            })
+            .putString("text_style", s.textStyle.let {
+                org.json.JSONObject()
+                    .put("font", it.font.name).put("size", it.size.toDouble()).put("bold", it.bold).put("italic", it.italic)
+                    .put("underline", it.underline).put("color", it.color).put("border", it.border)
+                    .put("borderWidth", it.borderWidth.toDouble()).put("borderColor", it.borderColor)
+                    .put("background", it.background).put("backgroundColor", it.backgroundColor)
+                    .toString()
+            })
             .putBoolean("pressure", s.pressure)
             .apply()
     }
@@ -1009,7 +1035,23 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             markupColor = prefs.getInt("markup_color", d.markupColor),
             fingerDraws = prefs.getBoolean("finger_draws", d.fingerDraws),
             shape = runCatching { ShapeKind.valueOf(prefs.getString("shape", null)!!) }.getOrDefault(d.shape),
-            textSize = prefs.getFloat("text_size", d.textSize),
+            shapeStyle = runCatching {
+                val o = org.json.JSONObject(prefs.getString("shape_style", null)!!)
+                ShapeStyle(
+                    border = o.getBoolean("border"), borderColor = o.getInt("borderColor"),
+                    borderWidth = o.getDouble("borderWidth").toFloat(), fill = o.getBoolean("fill"), fillColor = o.getInt("fillColor"),
+                )
+            }.getOrDefault(d.shapeStyle),
+            textStyle = runCatching {
+                val o = org.json.JSONObject(prefs.getString("text_style", null)!!)
+                TextBoxStyle(
+                    font = TextFont.valueOf(o.getString("font")), size = o.getDouble("size").toFloat(),
+                    bold = o.getBoolean("bold"), italic = o.getBoolean("italic"), underline = o.getBoolean("underline"),
+                    color = o.getInt("color"), border = o.getBoolean("border"), borderWidth = o.getDouble("borderWidth").toFloat(),
+                    borderColor = o.getInt("borderColor"), background = o.getBoolean("background"),
+                    backgroundColor = o.getInt("backgroundColor"),
+                )
+            }.getOrDefault(d.textStyle),
             pressure = prefs.getBoolean("pressure", d.pressure),
         )
     }

@@ -75,25 +75,32 @@ class AnnotateTest {
 
     @Test
     fun drawsErasesAndUndoesInk() = runBlocking {
-        val stroke = (0..20).map { PdfPoint(200f + it * 10f, 400f) }
+        val stroke = (0..20).map { PdfPoint(200f + it * 10f, 400f) } // x 200..400
         doc.addInk(0, stroke, InkStyle(0x000000, 4f))
         doc.addInk(0, stroke.map { it.copy(y = 450f) }, InkStyle(0xFF0000, 4f))
         assertEquals(2, doc.annotations(0).count { it.kind == AnnotationKind.INK })
         assertEquals(Color.BLACK, doc.renderPage(0, 612).getPixel(300, 400))
 
-        // One eraser gesture over both strokes, delivered in two pieces: undone as one step.
+        // One eraser gesture across the middle of both strokes, in two pieces: undone as one step.
         assertNotNull(doc.erase(0, listOf(PdfPoint(300f, 390f), PdfPoint(300f, 410f)), 5f, gesture = 1))
         assertNotNull(doc.erase(0, listOf(PdfPoint(300f, 440f), PdfPoint(300f, 460f)), 5f, gesture = 1))
         assertNull(doc.erase(0, listOf(PdfPoint(50f, 50f)), 5f, gesture = 1))
-        assertTrue(doc.annotations(0).isEmpty())
-        assertEquals(Color.WHITE, doc.renderPage(0, 612).getPixel(300, 400))
+        val bitmap = doc.renderPage(0, 612)
+        assertEquals("rubbed out where the eraser went", Color.WHITE, bitmap.getPixel(300, 400))
+        assertEquals("the rest of the stroke is still there", Color.BLACK, bitmap.getPixel(240, 400))
+        assertEquals(Color.BLACK, bitmap.getPixel(360, 400))
+        assertEquals("still one drawing each, now in two pieces", 2, doc.annotations(0).count { it.kind == AnnotationKind.INK })
+
+        // Rubbing out all of a stroke removes the drawing.
+        doc.erase(0, (0..40).map { PdfPoint(195f + it * 5.5f, 450f) }, 8f, gesture = 2)
+        assertEquals(1, doc.annotations(0).count { it.kind == AnnotationKind.INK })
 
         doc.undo()
         assertEquals(2, doc.annotations(0).size)
         doc.undo()
-        assertEquals(1, doc.annotations(0).size)
+        assertEquals(Color.BLACK, doc.renderPage(0, 612).getPixel(300, 400))
         val state = doc.redo()
-        assertEquals(2, doc.annotations(0).size)
+        assertEquals(Color.WHITE, doc.renderPage(0, 612).getPixel(300, 400))
         assertTrue(state.canRedo)
     }
 
@@ -210,10 +217,10 @@ class AnnotateTest {
 
     @Test
     fun textBoxesAndShapes() = runBlocking {
-        doc.addTextBox(1, PdfPoint(100f, 400f), "Check this figure", 14f, 0xD32F2F)
-        doc.addShape(1, ShapeKind.RECTANGLE, PdfPoint(100f, 500f), PdfPoint(300f, 600f), InkStyle(0x1E5BD8, 2f))
-        doc.addShape(1, ShapeKind.ELLIPSE, PdfPoint(350f, 500f), PdfPoint(450f, 600f), InkStyle(0x1E5BD8, 2f))
-        doc.addShape(1, ShapeKind.ARROW, PdfPoint(100f, 700f), PdfPoint(300f, 650f), InkStyle(0x000000, 2f))
+        doc.addTextBox(1, PdfPoint(100f, 400f), "Check this figure", TextBoxStyle(color = 0xD32F2F))
+        doc.addShape(1, ShapeKind.RECTANGLE, PdfPoint(100f, 500f), PdfPoint(300f, 600f), ShapeStyle(borderColor = 0x1E5BD8, borderWidth = 2f))
+        doc.addShape(1, ShapeKind.ELLIPSE, PdfPoint(350f, 500f), PdfPoint(450f, 600f), ShapeStyle(borderColor = 0x1E5BD8, borderWidth = 2f))
+        doc.addShape(1, ShapeKind.ARROW, PdfPoint(100f, 700f), PdfPoint(300f, 650f), ShapeStyle(borderColor = 0x000000, borderWidth = 2f))
         val kinds = doc.annotations(1).map { it.kind }
         assertEquals(listOf(AnnotationKind.TEXT_BOX, AnnotationKind.SHAPE, AnnotationKind.SHAPE, AnnotationKind.SHAPE), kinds)
         val box = doc.annotations(1).first()
@@ -240,5 +247,56 @@ class AnnotateTest {
         doc.setProperties(DocumentProperties(title = "Changed"))
         doc.undo()
         assertEquals("Meeting notes", doc.title())
+    }
+
+    @Test
+    fun styledTextBoxes() = runBlocking {
+        val style = TextBoxStyle(
+            font = TextFont.SERIF, size = 20f, bold = true, italic = true, underline = true, color = 0xD32F2F,
+            border = true, borderWidth = 2f, borderColor = 0x1E5BD8, background = true, backgroundColor = 0xFFF59D,
+        )
+        doc.addTextBox(1, PdfPoint(100f, 400f), "Árvíztűrő tükörfúrógép\nsecond line", style)
+        val box = doc.annotations(1).single { it.kind == AnnotationKind.TEXT_BOX }
+        assertEquals(style, doc.textBoxStyle(1, box.id))
+        assertEquals("accented text can be found", 1, doc.search(1, "tükörfúrógép").size)
+        val b = box.bounds
+        val bitmap = doc.renderPage(1, 612)
+        assertNear("border", 0x1E5BD8, bitmap.getPixel(b.left.toInt() + 1, ((b.top + b.bottom) / 2).toInt()))
+        assertNear("background", 0xFFF59D, bitmap.getPixel(b.right.toInt() - 6, b.bottom.toInt() - 6))
+
+        // Bold text is wider than regular.
+        doc.updateTextBox(1, box.id, "Árvíztűrő tükörfúrógép\nsecond line", style.copy(bold = false))
+        val regular = doc.annotations(1).single { it.kind == AnnotationKind.TEXT_BOX }
+        assertTrue("bold ${b.right - b.left} vs regular ${regular.bounds.right - regular.bounds.left}", b.right - b.left > regular.bounds.right - regular.bounds.left)
+        assertEquals("stays where it was", b.left, regular.bounds.left, 0.5f)
+        assertEquals(b.top, regular.bounds.top, 0.5f)
+
+        // Survives saving and reopening, look and all.
+        doc.saveTo(context, Uri.fromFile(file))
+        doc.close()
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        val reopened = doc.annotations(1).single { it.kind == AnnotationKind.TEXT_BOX }
+        assertEquals(style.copy(bold = false), doc.textBoxStyle(1, reopened.id))
+        assertNear("background after reopening", 0xFFF59D, doc.renderPage(1, 612).getPixel(reopened.bounds.right.toInt() - 6, reopened.bounds.bottom.toInt() - 6))
+    }
+
+    @Test
+    fun filledShapesWithAndWithoutOutline() = runBlocking {
+        doc.addShape(1, ShapeKind.RECTANGLE, PdfPoint(100f, 500f), PdfPoint(300f, 600f),
+            ShapeStyle(border = true, borderColor = 0x000000, borderWidth = 3f, fill = true, fillColor = 0x2E7D32))
+        doc.addShape(1, ShapeKind.ELLIPSE, PdfPoint(350f, 500f), PdfPoint(500f, 600f),
+            ShapeStyle(border = false, fill = true, fillColor = 0xD32F2F))
+        val bitmap = doc.renderPage(1, 612)
+        assertNear("filled", 0x2E7D32, bitmap.getPixel(200, 550))
+        // The outline straddles the edge at x = 100.
+        assertNear("outlined", 0x000000, (95..105).map { bitmap.getPixel(it, 550) }.minBy { Color.red(it) + Color.green(it) + Color.blue(it) })
+        assertNear("oval filled", 0xD32F2F, bitmap.getPixel(425, 550))
+        assertNear("oval has no outline", 0xD32F2F, bitmap.getPixel(352, 550))
+    }
+
+    /** [actual] (ARGB) is [expected] (0xRRGGBB), give or take rounding. */
+    private fun assertNear(what: String, expected: Int, actual: Int) {
+        val close = listOf(16, 8, 0).all { shift -> kotlin.math.abs(((expected shr shift) and 0xFF) - ((actual shr shift) and 0xFF)) <= 8 }
+        assertTrue("$what: expected %06x, got %06x".format(expected, actual and 0xFFFFFF), close)
     }
 }
