@@ -66,6 +66,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.szabadpdf.core.pdf.FormField
 import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.PageSize
 import org.szabadpdf.core.pdf.PdfPoint
@@ -92,6 +93,8 @@ internal interface PageActions {
     fun onTextHighlight(page: Int, start: PdfPoint, end: PdfPoint, finished: Boolean)
     fun onTextHighlightCancelled()
     fun onStylusSeen()
+    /** A page came into view (e.g. to load its form fields). */
+    fun onPageShown(page: Int) {}
 }
 
 /** Everything about annotating that the page list draws or reacts to. */
@@ -102,12 +105,14 @@ internal class AnnotationLayer(
     val pending: Map<Int, List<PendingStroke>>,
     val selection: TextSelection?,
     val versions: PageVersions,
+    val fields: Map<Int, List<FormField>> = emptyMap(),
 )
 
 internal val PageGap = 8.dp
 private val HighlightColor = Color(0x66FFD54F)
 private val CurrentHighlightColor = Color(0x88FF7043)
 private val SelectionColor = Color(0x553D8BFD)
+private val FieldColor = Color(0x223D6BFD)
 private val HandleColor = Color(0xFF3D8BFD)
 private val HandleRadius = 7.dp
 private val EraserRadius = 12.dp
@@ -437,6 +442,8 @@ private fun PageItem(
     val liveStroke = remember { mutableStateListOf<Offset>() }
     var eraserAt by remember { mutableStateOf<Offset?>(null) }
     val selection = layer.selection?.takeIf { it.page == index }
+    LaunchedEffect(index) { actions.onPageShown(index) }
+    val fields = layer.fields[index].orEmpty().filter { it.fillable }
 
     Box(
         modifier
@@ -602,6 +609,10 @@ private fun PageItem(
                 for (r in hit.rects) {
                     drawRect(color, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
                 }
+            }
+            for (field in fields) {
+                val r = field.bounds
+                drawRect(FieldColor, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
             }
             for (stroke in pending) {
                 drawInk(stroke.points.map { Offset(it.x * k, it.y * k) }, stroke.style, k)

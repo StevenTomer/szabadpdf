@@ -427,3 +427,55 @@ internal fun ProtectDialog(
         },
     )
 }
+
+/** Typing into a form's text field. */
+@Composable
+internal fun TextFieldDialog(field: org.szabadpdf.core.pdf.FormField, onDone: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by rememberSaveable { mutableStateOf(field.value) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(field.name.ifBlank { "Fill in" }) },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                singleLine = !field.multiline,
+                minLines = if (field.multiline) 4 else 1,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focus),
+            )
+        },
+        confirmButton = { TextButton(onClick = { onDone(text) }) { Text("Done") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+/** Picking a value for a form's dropdown or list. */
+@Composable
+internal fun ChoiceFieldDialog(field: org.szabadpdf.core.pdf.FormField, onChoose: (String) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(field.name.ifBlank { "Choose" }) },
+        text = {
+            Column {
+                for (option in field.options) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onChoose(option) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.RadioButton(selected = option == field.value, onClick = { onChoose(option) })
+                        Text(option, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}

@@ -18,6 +18,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import org.szabadpdf.core.pdf.AnnotationInfo
 import org.szabadpdf.core.pdf.DocumentFiles
 import org.szabadpdf.core.pdf.EditState
+import org.szabadpdf.core.pdf.FieldKind
+import org.szabadpdf.core.pdf.FormField
 import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.LinkTarget
 import org.szabadpdf.core.pdf.MarkupKind
@@ -108,6 +110,10 @@ data class AnnotateState(
         else -> null
     }
 }
+
+/** Fields the user can fill in by tapping. */
+val FormField.fillable: Boolean
+    get() = !readOnly && kind in setOf(FieldKind.TEXT, FieldKind.CHECKBOX, FieldKind.RADIO, FieldKind.CHOICE)
 
 /** A stroke that's been drawn and is being added to the document. */
 data class PendingStroke(val points: List<PdfPoint>, val style: InkStyle)
@@ -236,6 +242,9 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         lastWidth.clear()
         selectJob?.cancel()
         _search.value = SearchState()
+        _fields.value = emptyMap()
+        fieldsRequested.clear()
+        formNoticeShown = false
         _selection.value = null
         _pending.value = emptyMap()
         _versions.value = PageVersions()
@@ -522,6 +531,55 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         editPage(page, "Couldn't place the signature") { it.addInk(page, strokes, style, "Signature") }
     }
 
+    // --- forms -----------------------------------------------------------------------------
+
+    private val _fields = MutableStateFlow<Map<Int, List<FormField>>>(emptyMap())
+
+    /** Form fields of the pages seen so far. */
+    val fields: StateFlow<Map<Int, List<FormField>>> = _fields.asStateFlow()
+    private val fieldsRequested = HashSet<Int>()
+    private var formNoticeShown = false
+
+    /** Loads [page]'s form fields (once), when it comes into view. */
+    fun loadFields(page: Int) {
+        val doc = document ?: return
+        if (!fieldsRequested.add(page)) return
+        viewModelScope.launch { refreshFields(doc, page) }
+    }
+
+    private suspend fun refreshFields(doc: PdfDocument, page: Int) {
+        val list = runCatching { doc.formFields(page) }.getOrDefault(emptyList())
+        _fields.update { it + (page to list) }
+        if (!formNoticeShown && list.any { it.fillable }) {
+            formNoticeShown = true
+            _events.trySend(ViewerEvent.Message("This PDF has a form: tap a field to fill it in"))
+        }
+    }
+
+    fun fieldAt(page: Int, point: PdfPoint): FormField? = _fields.value[page]?.lastOrNull {
+        it.fillable && point.x >= it.bounds.left && point.x <= it.bounds.right && point.y >= it.bounds.top && point.y <= it.bounds.bottom
+    }
+
+    fun fillText(page: Int, id: Int, text: String) = fillField(page) { it.setFieldText(page, id, text) }
+
+    fun toggleField(page: Int, id: Int) = fillField(page) { it.toggleField(page, id) }
+
+    fun chooseField(page: Int, id: Int, value: String) = fillField(page) { it.setFieldChoice(page, id, value) }
+
+    private fun fillField(page: Int, change: suspend (PdfDocument) -> EditState) {
+        val doc = document ?: return
+        viewModelScope.launch {
+            runCatching { change(doc) }
+                .onSuccess {
+                    pageChanged(page)
+                    setEdits(it)
+                    // A radio button can untick others, on other pages too: reload what's loaded.
+                    _fields.value.keys.forEach { p -> refreshFields(doc, p) }
+                }
+                .onFailure { report("Couldn't fill in the field", it) }
+        }
+    }
+
     fun undo() = editAll { it.undo() }
 
     fun redo() = editAll { it.redo() }
@@ -645,6 +703,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         val doc = document ?: return
         viewModelScope.launch {
             runCatching { change(doc) }.onSuccess {
+                _fields.value.keys.forEach { p -> refreshFields(doc, p) }
                 outline = null
                 _versions.update { v -> PageVersions(all = v.all + 1) }
                 setEdits(it)

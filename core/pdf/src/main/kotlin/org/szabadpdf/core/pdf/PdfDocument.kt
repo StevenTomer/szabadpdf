@@ -338,6 +338,57 @@ class PdfDocument private constructor(
         }
     }
 
+    // --- forms -----------------------------------------------------------------------------
+
+    /** The form fields on page [index] (none for pages, or documents, without a form). */
+    suspend fun formFields(index: Int): List<FormField> = onEngine {
+        val page = doc.loadPage(index) as? PDFPage ?: return@onEngine emptyList()
+        try {
+            val origin = bounds[index]
+            page.widgets.orEmpty().map { w ->
+                val kind = when {
+                    w.isText -> FieldKind.TEXT
+                    w.isCheckbox -> FieldKind.CHECKBOX
+                    w.isRadioButton -> FieldKind.RADIO
+                    w.isChoice -> FieldKind.CHOICE
+                    w.fieldType == com.artifex.mupdf.fitz.PDFWidget.TYPE_SIGNATURE -> FieldKind.SIGNATURE
+                    w.isPushButton -> FieldKind.BUTTON
+                    else -> FieldKind.OTHER
+                }
+                val b = w.bounds
+                val state = runCatching { w.`object`.get("AS").asName() }.getOrNull()
+                FormField(
+                    id = w.`object`.asIndirect(),
+                    kind = kind,
+                    name = runCatching { w.name }.getOrNull().orEmpty(),
+                    bounds = PdfRect(b.x0 - origin.x0, b.y0 - origin.y0, b.x1 - origin.x0, b.y1 - origin.y0),
+                    value = runCatching { w.value }.getOrNull().orEmpty(),
+                    checked = state != null && state != "Off" && state.isNotEmpty(),
+                    options = if (kind == FieldKind.CHOICE) w.options?.toList().orEmpty() else emptyList(),
+                    multiline = kind == FieldKind.TEXT && w.isMultiline,
+                    readOnly = w.isReadOnly,
+                )
+            }
+        } finally {
+            page.destroy()
+        }
+    }
+
+    suspend fun setFieldText(index: Int, id: Int, text: String): EditState = onEngine {
+        edit(index, "Fill") { page -> widget(page, id)?.let { it.setTextValue(text); it.update() } }
+    }
+
+    /** Ticks or unticks a checkbox, or selects a radio button. */
+    suspend fun toggleField(index: Int, id: Int): EditState = onEngine {
+        edit(index, "Fill") { page -> widget(page, id)?.let { it.toggle(); it.update() } }
+    }
+
+    suspend fun setFieldChoice(index: Int, id: Int, value: String): EditState = onEngine {
+        edit(index, "Fill") { page -> widget(page, id)?.let { it.setChoiceValue(value); it.update() } }
+    }
+
+    private fun widget(page: PDFPage, id: Int) = page.widgets.orEmpty().firstOrNull { it.`object`.asIndirect() == id }
+
     /** Whether the file is encrypted (needs a password to open). */
     suspend fun isEncrypted(): Boolean = onEngine {
         val pdf = doc as? PDFDocument ?: return@onEngine false

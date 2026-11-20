@@ -1,0 +1,81 @@
+%PDF-1.7
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /AcroForm 20 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /Helv 5 0 R >> >> /Annots [10 0 R 11 0 R 13 0 R 14 0 R 15 0 R] >>
+endobj
+4 0 obj
+<< /Length 212 >>
+stream
+BT /Helv 14 Tf 72 700 Td (Order form) Tj ET BT /Helv 11 Tf 72 658 Td (Name) Tj ET BT /Helv 11 Tf 72 606 Td (I agree) Tj ET BT /Helv 11 Tf 72 556 Td (Colour: red / blue) Tj ET BT /Helv 11 Tf 72 506 Td (Size) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 18 18] /Length 41 >>
+stream
+0 g 3 3 12 12 re f 0 G 0.5 0.5 17 17 re S
+endstream
+endobj
+7 0 obj
+<< /Type /XObject /Subtype /Form /BBox [0 0 18 18] /Length 22 >>
+stream
+0 G 0.5 0.5 17 17 re S
+endstream
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /V () /F 4 /P 3 0 R /Rect [150 650 450 672] /DA (/Helv 12 Tf 0 g) /MK << /BC [0 0 0] >> >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Off /AS /Off /F 4 /P 3 0 R /Rect [150 600 168 618] /MK << /CA (4) >> /AP << /N << /Yes 6 0 R /Off 7 0 R >> >> >>
+endobj
+12 0 obj
+<< /FT /Btn /Ff 49152 /T (color) /V /Off /Kids [13 0 R 14 0 R] >>
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Off /F 4 /P 3 0 R /Rect [150 550 168 568] /AP << /N << /Red 6 0 R /Off 7 0 R >> >> >>
+endobj
+14 0 obj
+<< /Type /Annot /Subtype /Widget /Parent 12 0 R /AS /Off /F 4 /P 3 0 R /Rect [190 550 208 568] /AP << /N << /Blue 6 0 R /Off 7 0 R >> >> >>
+endobj
+15 0 obj
+<< /Type /Annot /Subtype /Widget /FT /Ch /Ff 131072 /T (size) /V (Medium) /Opt [(Small) (Medium) (Large)] /F 4 /P 3 0 R /Rect [150 500 300 522] /DA (/Helv 12 Tf 0 g) >>
+endobj
+20 0 obj
+<< /Fields [10 0 R 11 0 R 12 0 R 15 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> /NeedAppearances true >>
+endobj
+xref
+0 21
+0000000000 65535 f 
+0000000015 00000 n 
+0000000081 00000 n 
+0000000138 00000 n 
+0000000311 00000 n 
+0000000574 00000 n 
+0000000671 00000 n 
+0000000810 00000 n 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000930 00000 n 
+0000001088 00000 n 
+0000001274 00000 n 
+0000001356 00000 n 
+0000001511 00000 n 
+0000001667 00000 n 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000000 65535 f 
+0000000000 65535 f 
+0000001852 00000 n 
+trailer
+<< /Size 21 /Root 1 0 R >>
+startxref
+1989
+%%EOF

@@ -65,3 +65,21 @@ data class OcrWord(
     val lineHeight: Int,
     val lineBottom: Int,
 )
+
+enum class FieldKind { TEXT, CHECKBOX, RADIO, CHOICE, SIGNATURE, BUTTON, OTHER }
+
+/**
+ * A form field's widget on a page. [id] is the widget's object number. [checked] is for
+ * checkboxes and radio buttons (this particular button); [options] for dropdowns and lists.
+ */
+data class FormField(
+    val id: Int,
+    val kind: FieldKind,
+    val name: String,
+    val bounds: PdfRect,
+    val value: String,
+    val checked: Boolean,
+    val options: List<String>,
+    val multiline: Boolean,
+    val readOnly: Boolean,
+)

@@ -19,6 +19,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalDensity
 import org.szabadpdf.core.pdf.AnnotationInfo
 import org.szabadpdf.core.pdf.AnnotationKind
+import org.szabadpdf.core.pdf.FieldKind
+import org.szabadpdf.core.pdf.FormField
 import org.szabadpdf.core.pdf.MarkupKind
 import org.szabadpdf.core.pdf.PdfPoint
 import org.szabadpdf.core.pdf.TextSelection
@@ -170,6 +172,9 @@ private fun DocumentScreen(
     var showStyle by rememberSaveable { mutableStateOf(false) }
     var showProtect by rememberSaveable { mutableStateOf(false) }
     var showPad by rememberSaveable { mutableStateOf(false) }
+    /** The text field or dropdown being filled in. */
+    var editingField by remember { mutableStateOf<Pair<Int, FormField>?>(null) }
+    val fields by viewModel.fields.collectAsState()
     /** Where to put the signature once it's been drawn. */
     var signAt by remember { mutableStateOf<NewNote?>(null) }
     val signature by viewModel.signature.collectAsState()
@@ -354,6 +359,13 @@ private fun DocumentScreen(
                         viewModel.annotationAt(page, point, slop(page))?.let { tapped = AnnotationTap(page, it) }
                     }
                     null -> scope.launch {
+                        viewModel.fieldAt(page, point)?.let { field ->
+                            when (field.kind) {
+                                FieldKind.CHECKBOX, FieldKind.RADIO -> viewModel.toggleField(page, field.id)
+                                else -> editingField = page to field
+                            }
+                            return@launch
+                        }
                         val note = viewModel.annotationAt(page, point, slop(page))?.takeIf { it.kind == AnnotationKind.NOTE }
                         if (note != null) {
                             tapped = AnnotationTap(page, note)
@@ -399,6 +411,8 @@ private fun DocumentScreen(
             override fun onTextHighlightCancelled() = viewModel.clearSelection()
 
             override fun onStylusSeen() = viewModel.onStylusSeen()
+
+            override fun onPageShown(page: Int) = viewModel.loadFields(page)
         }
     }
 
@@ -422,6 +436,7 @@ private fun DocumentScreen(
                 pending = pendingInk,
                 selection = selection,
                 versions = versions,
+                fields = fields,
             ),
             actions = actions,
         )
@@ -661,6 +676,28 @@ private fun DocumentScreen(
             } else null,
             onDismiss = { unsavedPrompt = null },
         )
+    }
+
+    editingField?.let { (page, field) ->
+        if (field.kind == FieldKind.CHOICE) {
+            ChoiceFieldDialog(
+                field = field,
+                onChoose = {
+                    editingField = null
+                    viewModel.chooseField(page, field.id, it)
+                },
+                onDismiss = { editingField = null },
+            )
+        } else {
+            TextFieldDialog(
+                field = field,
+                onDone = {
+                    editingField = null
+                    viewModel.fillText(page, field.id, it)
+                },
+                onDismiss = { editingField = null },
+            )
+        }
     }
 
     if (showPad) {
