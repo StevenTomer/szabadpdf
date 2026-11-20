@@ -14,6 +14,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.MergeType
+import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -41,12 +43,23 @@ fun HomeScreen(
     recents: List<RecentFile>,
     onOpenPicker: () -> Unit,
     onScan: () -> Unit,
+    onMerge: () -> Unit,
     onOpenTab: (android.net.Uri) -> Unit,
     onOpenRecent: (RecentFile) -> Unit,
     onRemoveRecent: (RecentFile) -> Unit,
 ) {
     Scaffold(
-        topBar = { TopAppBar(title = { Text("SzabadPDF") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("SzabadPDF") },
+                actions = {
+                    TextButton(onClick = onMerge) {
+                        Icon(Icons.Filled.MergeType, contentDescription = null)
+                        Text("Merge PDFs", Modifier.padding(start = 8.dp))
+                    }
+                },
+            )
+        },
         floatingActionButton = {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 ExtendedFloatingActionButton(

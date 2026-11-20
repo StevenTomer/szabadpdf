@@ -35,6 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SelectAll
@@ -213,6 +214,7 @@ fun OrganizeScreen(
                         IconButton(onClick = { viewModel.moveSelected(toStart = false) }) {
                             Icon(Icons.Filled.VerticalAlignBottom, "Move to end")
                         }
+                        IconButton(onClick = viewModel::duplicateSelected) { Icon(Icons.Filled.ContentCopy, "Duplicate") }
                         IconButton(onClick = viewModel::deleteSelected) { Icon(Icons.Filled.Delete, "Delete") }
                     }
                 }

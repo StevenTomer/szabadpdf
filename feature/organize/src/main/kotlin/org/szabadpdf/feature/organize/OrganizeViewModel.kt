@@ -171,6 +171,21 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         clearSelection()
     }
 
+    /**
+     * Puts a copy of each selected page right after it. The copies become the selection, so
+     * they can be moved or rotated straight away.
+     */
+    fun duplicateSelected() {
+        val copies = mutableListOf<Long>()
+        edit { s ->
+            s.pages.flatMap { page ->
+                if (page.id in s.selected) listOf(page, page.copy(id = nextId++).also { copies += it.id }) else listOf(page)
+            }
+        }
+        if (copies.isEmpty()) return
+        _state.update { s -> s.copy(selected = copies.toSet(), focus = s.pages.indexOfFirst { it.id == copies.first() }) }
+    }
+
     /** Moves the selected pages, in order, to the start or end. */
     fun moveSelected(toStart: Boolean) = edit { s ->
         val (picked, rest) = s.pages.partition { it.id in s.selected }
@@ -321,12 +336,20 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
             // A fresh copy is rebuilt and written out, so the one showing thumbnails stays
             // untouched if anything goes wrong.
             var fresh: PdfDocument? = null
+            // Extra copies of the document's own pages come from a second fresh instance.
+            var copiesSource: PdfDocument? = null
             try {
                 val doc = openDocument(original, password).also { fresh = it }
+                val used = HashSet<Int>()
                 val specs = s.pages.map { page ->
                     when (page.source) {
                         EditPage.BLANK -> PageSpec.Blank(page.size, page.rotation)
-                        EditPage.MAIN -> PageSpec.Existing(page.index, rotation = page.rotation)
+                        EditPage.MAIN -> if (used.add(page.index)) {
+                            PageSpec.Existing(page.index, rotation = page.rotation)
+                        } else {
+                            val from = copiesSource ?: openDocument(original, password).also { copiesSource = it }
+                            PageSpec.Existing(page.index, from = from, rotation = page.rotation)
+                        }
                         else -> PageSpec.Existing(page.index, from = documentFor(page.source), rotation = page.rotation)
                     }
                 }
@@ -342,6 +365,7 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
                 _events.send(OrganizeEvent.Message("Couldn't save: ${e.message ?: e.javaClass.simpleName}"))
             } finally {
                 fresh?.close()
+                copiesSource?.close()
                 output.delete()
             }
         }

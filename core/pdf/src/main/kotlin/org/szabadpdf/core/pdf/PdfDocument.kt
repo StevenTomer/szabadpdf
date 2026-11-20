@@ -19,6 +19,7 @@ import com.artifex.mupdf.fitz.Quad
 import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.PDFDocument
 import com.artifex.mupdf.fitz.PDFGraftMap
+import com.artifex.mupdf.fitz.PDFObject
 import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.android.AndroidDrawDevice
 import kotlinx.coroutines.withContext
@@ -149,9 +150,15 @@ class PdfDocument private constructor(
      * order: reordered, rotated, dropped, blank or taken from other open documents. Everything
      * else (metadata, bookmarks to pages that remain, forms) is kept.
      *
+     * Each of this document's own pages can appear once; for more copies (duplicating pages),
+     * take them from a second instance of the same file via [PageSpec.Existing.from]. Pages from
+     * other documents keep their annotations (except links and form fields).
+     *
      * The rebuild happens to this document in memory, so it should be a fresh instance opened
-     * only for saving and closed afterwards; documents named in [PageSpec.Existing.from] are
-     * only read. The written file is reopened and checked before this returns.
+     * only for saving and closed afterwards. Documents named in [PageSpec.Existing.from] aren't
+     * saved, but their annotations are unhooked from their pages in memory while being copied,
+     * so they should also be instances opened for this purpose (or not used for editing after).
+     * The written file is reopened and checked before this returns.
      */
     suspend fun saveRearranged(pages: List<PageSpec>, target: File) = onEngine {
         require(pages.isNotEmpty()) { "A document needs at least one page" }
@@ -170,7 +177,9 @@ class PdfDocument private constructor(
                             val src = from.doc as? PDFDocument
                                 ?: throw UnsupportedOperationException("Only pages from PDF files can be inserted")
                             check(!from.closed) { "Source document is closed" }
-                            graftMaps.getOrPut(from) { pdf.newPDFGraftMap() }.graftPage(-1, src, spec.index)
+                            val map = graftMaps.getOrPut(from) { pdf.newPDFGraftMap() }
+                            map.graftPage(-1, src, spec.index)
+                            copyAnnotations(src, spec.index, pdf.findPage(next))
                             next++
                         }
                     }
@@ -181,7 +190,9 @@ class PdfDocument private constructor(
                     }
                 }
             }
-            require(order.distinct().size == order.size) { "A page can't appear twice" }
+            require(order.distinct().size == order.size) {
+                "A page of this document can't appear twice; take copies from a second instance"
+            }
             pdf.rearrangePages(order)
 
             pages.forEachIndexed { i, spec ->
@@ -521,6 +532,38 @@ class PdfDocument private constructor(
         val x = a.x + t * dx - p.x
         val y = a.y + t * dy - p.y
         return kotlin.math.sqrt(x * x + y * y)
+    }
+
+    /**
+     * Copies the annotations of [src]'s page [index] onto [target], a page just grafted from it
+     * (grafting a page leaves annotations behind). Links and form fields are skipped: links can
+     * point into the other document, and fields belong to its form.
+     */
+    private fun copyAnnotations(src: PDFDocument, index: Int, target: PDFObject) {
+        val pdf = doc as PDFDocument
+        val annots = src.findPage(index).get("Annots").resolve()
+        if (annots.isNull || !annots.isArray || annots.size() == 0) return
+        val keep = (0 until annots.size()).map { annots.get(it) }.filter {
+            val type = it.resolve().get("Subtype").asName()
+            type != "Link" && type != "Widget"
+        }
+        if (keep.isEmpty()) return
+        // Each annotation points back to its page (/P), and from there to the whole page tree;
+        // cut those links first so only the annotations themselves are copied.
+        keep.forEach { it.resolve().delete("P") }
+        // A map of its own, so a page copied twice gets two sets of annotations, not one shared.
+        val map = pdf.newPDFGraftMap()
+        try {
+            val copies = pdf.newArray()
+            for (annot in keep) {
+                val copy = map.graftObject(annot)
+                copy.resolve().put("P", target)
+                copies.push(copy)
+            }
+            target.resolve().put("Annots", copies)
+        } finally {
+            map.destroy()
+        }
     }
 
     /** Reopens a written file to make sure it's readable and has every page. */

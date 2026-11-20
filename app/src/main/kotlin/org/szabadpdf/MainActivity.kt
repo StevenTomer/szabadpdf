@@ -19,6 +19,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import org.szabadpdf.feature.organize.MergeScreen
+import org.szabadpdf.feature.organize.MergeViewModel
 import org.szabadpdf.feature.organize.OrganizeScreen
 import org.szabadpdf.feature.organize.OrganizeViewModel
 import org.szabadpdf.feature.scan.ScanScreen
@@ -36,6 +38,7 @@ class MainActivity : ComponentActivity() {
 
     private val organizer: OrganizeViewModel by viewModels()
     private val scanner: ScanViewModel by viewModels()
+    private val merger: MergeViewModel by viewModels()
     private lateinit var recents: RecentFiles
     private lateinit var openTabs: OpenTabs
 
@@ -55,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 App(
                     organizer = organizer,
                     scanner = scanner,
+                    merger = merger,
                     recents = recents,
                     openTabs = openTabs,
                     incoming = incoming,
@@ -71,6 +75,7 @@ class MainActivity : ComponentActivity() {
 private fun App(
     organizer: OrganizeViewModel,
     scanner: ScanViewModel,
+    merger: MergeViewModel,
     recents: RecentFiles,
     openTabs: OpenTabs,
     incoming: Uri?,
@@ -86,6 +91,7 @@ private fun App(
     /** Page to start the organize grid at, or -1 when not organizing. */
     var organizeFrom by rememberSaveable { mutableIntStateOf(-1) }
     var scanning by rememberSaveable { mutableStateOf(false) }
+    var merging by rememberSaveable { mutableStateOf(false) }
     /** Scanning pages to add to the document being organized, after this page (-1: per selection). */
     var scanInto by rememberSaveable { mutableStateOf<Int?>(null) }
     // Each tab's scroll position and other screen state, kept while it's in the background.
@@ -133,8 +139,29 @@ private fun App(
 
     fun nameOf(uri: Uri) = recentItems.firstOrNull { it.uri == uri }?.name ?: uri.lastPathSegment ?: "Document"
 
+    val mergePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) {
+            merger.clear()
+            merger.add(uris)
+            merging = true
+        }
+    }
+
     val current = active
-    if (scanInto != null && current != null) {
+    if (merging) {
+        MergeScreen(
+            viewModel = merger,
+            onSaved = { uri ->
+                merging = false
+                merger.clear()
+                show(uri)
+            },
+            onClose = {
+                merging = false
+                merger.clear()
+            },
+        )
+    } else if (scanInto != null && current != null) {
         ScanScreen(
             viewModel = scanner,
             onSaved = {},
@@ -168,6 +195,7 @@ private fun App(
             recents = recentItems,
             onOpenPicker = { picker.launch(arrayOf("application/pdf")) },
             onScan = { scanning = true },
+            onMerge = { mergePicker.launch(arrayOf("application/pdf")) },
             onOpenTab = { show(it) },
             onOpenRecent = { show(it.uri) },
             onRemoveRecent = { recents.remove(it.uri, releaseAccess = it.uri !in tabs) },

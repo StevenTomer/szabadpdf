@@ -40,7 +40,8 @@ core/pdf/             Kotlin wrapper around MuPDF: opening, rendering, search, l
 feature/viewer/       continuous scrolling, zoom, search, table of contents, go to page, and
                       annotating: pen and highlighter ink (stylus-aware), text selection, highlight/
                       underline/strikeout, sticky notes, eraser, undo/redo, saving
-feature/organize/     page grid: drag to reorder, rotate, delete, insert blank pages or other PDFs
+feature/organize/     page grid: drag to reorder, rotate, duplicate, delete, insert blank pages or
+                      other PDFs; and merging several PDFs into one
 core/scan/            document detection and cleanup: FairScan's image processing (copied unchanged,
                       see core/scan/README.md) and segmentation model, behind DocumentScanner
 feature/scan/         camera with live page outline, photo import, review (crop, rotate, colour,
@@ -76,7 +77,8 @@ shows them.
 ## Roadmap
 
 1. Viewer (done: scrolling, pinch and double-tap zoom with sharp re-rendering, search, table of contents, links, go to page, recent files)
-2. Page organization (done: drag to reorder, rotate, delete, move to start/end, insert blank pages or
+2. Page organization (done: drag to reorder, rotate, duplicate, delete, move to start/end, merge PDFs,
+   insert blank pages or
    pages from another PDF, undo/redo; save in place or as a copy. Saving writes and checks a new file
    first, and backs up the original so a failed write puts it back)
 3. Annotations (done: freehand pen and highlighter with colours and widths, stylus support (a pen
