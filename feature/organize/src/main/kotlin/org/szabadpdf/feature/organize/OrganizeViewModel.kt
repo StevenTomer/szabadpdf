@@ -180,9 +180,13 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         s.pages.toMutableList().apply { add(at, EditPage(nextId++, EditPage.BLANK, 0, size)) }
     }
 
-    /** Inserts every page of another PDF after the selection (or at the end). */
-    fun insertDocument(from: Uri) {
+    /**
+     * Inserts every page of another PDF after the page at position [after], or after the
+     * selection (or at the end) when that's null. [scanned] only changes the message.
+     */
+    fun insertDocument(from: Uri, after: Int? = null, scanned: Boolean = false) {
         viewModelScope.launch {
+            openJob?.join() // e.g. scanning started before the document had finished opening
             val doc = try {
                 PdfDocument.open(getApplication(), from)
             } catch (e: CancellationException) {
@@ -208,11 +212,12 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
             val source = inserted.size
             val count = doc.pageCount
             edit { s ->
-                val at = insertionPoint(s)
+                val at = if (after != null) (after + 1).coerceIn(0, s.pages.size) else insertionPoint(s)
                 val added = doc.pageSizes.mapIndexed { i, size -> EditPage(nextId++, source, i, size) }
                 s.pages.toMutableList().apply { addAll(at, added) }
             }
-            _events.send(OrganizeEvent.Message("Inserted $count page${if (count == 1) "" else "s"}"))
+            val what = if (scanned) "scanned page" else "page"
+            _events.send(OrganizeEvent.Message("Added $count $what${if (count == 1) "" else "s"}"))
         }
     }
 

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Print
@@ -127,6 +128,7 @@ internal fun MoreMenu(
     canSave: Boolean,
     onContents: () -> Unit,
     onOrganize: () -> Unit,
+    onScanInto: () -> Unit,
     onPaged: (Boolean) -> Unit,
     onShare: () -> Unit,
     onSaveAs: () -> Unit,
@@ -150,6 +152,11 @@ internal fun MoreMenu(
                     text = { Text("Organize pages") },
                     leadingIcon = { Icon(Icons.Filled.GridView, null) },
                     onClick = pick(onOrganize),
+                )
+                DropdownMenuItem(
+                    text = { Text("Scan pages into this document") },
+                    leadingIcon = { Icon(Icons.Filled.DocumentScanner, null) },
+                    onClick = pick(onScanInto),
                 )
             }
             DropdownMenuItem(

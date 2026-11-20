@@ -84,7 +84,8 @@ shows them.
    annotations, so other readers show them; saving appends to the original file when possible,
    which keeps existing digital signatures valid)
 4. Scanner (done: live page detection, automatic crop, perspective correction and cleanup, colour /
-   greyscale / black-and-white, manual corner adjustment, import from photos, save as PDF)
+   greyscale / black-and-white, manual corner adjustment, import from photos, save as PDF, or add
+   the scanned pages to an existing document from the viewer's ⋮ menu or the page organizer)
 5. Forms, signatures, sync
 
 ## License

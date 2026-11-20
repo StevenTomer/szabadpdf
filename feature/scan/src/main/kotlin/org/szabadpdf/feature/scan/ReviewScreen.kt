@@ -73,6 +73,7 @@ internal fun ReviewScreen(
     viewModel: ScanViewModel,
     onAddMore: () -> Unit,
     onSave: () -> Unit,
+    saveLabel: String,
 ) {
     val pages = state.pages
     val pager = rememberPagerState { pages.size }
@@ -85,7 +86,7 @@ internal fun ReviewScreen(
             title = { Text(if (pages.size == 1) "1 page" else "${pages.size} pages") },
             actions = {
                 IconButton(onClick = onAddMore) { Icon(Icons.Filled.AddAPhoto, "Scan more pages") }
-                TextButton(onClick = onSave, enabled = pages.isNotEmpty() && state.processing == 0) { Text("Save PDF") }
+                TextButton(onClick = onSave, enabled = pages.isNotEmpty() && state.processing == 0) { Text(saveLabel) }
             },
         )
         HorizontalPager(

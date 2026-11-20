@@ -86,6 +86,8 @@ private fun App(
     /** Page to start the organize grid at, or -1 when not organizing. */
     var organizeFrom by rememberSaveable { mutableIntStateOf(-1) }
     var scanning by rememberSaveable { mutableStateOf(false) }
+    /** Scanning pages to add to the document being organized, after this page (-1: per selection). */
+    var scanInto by rememberSaveable { mutableStateOf<Int?>(null) }
     // Each tab's scroll position and other screen state, kept while it's in the background.
     val tabStates = rememberSaveableStateHolder()
 
@@ -132,7 +134,25 @@ private fun App(
     fun nameOf(uri: Uri) = recentItems.firstOrNull { it.uri == uri }?.name ?: uri.lastPathSegment ?: "Document"
 
     val current = active
-    if (scanning) {
+    if (scanInto != null && current != null) {
+        ScanScreen(
+            viewModel = scanner,
+            onSaved = {},
+            onClose = {
+                // Cancelled from the viewer's shortcut: back to the viewer, not the organizer.
+                if ((scanInto ?: -1) >= 0) {
+                    organizer.discard()
+                    organizeFrom = -1
+                }
+                scanInto = null
+            },
+            onPages = { pdf ->
+                val after = scanInto?.takeIf { it >= 0 }
+                scanInto = null
+                organizer.insertDocument(Uri.fromFile(pdf), after = after, scanned = true)
+            },
+        )
+    } else if (scanning) {
         ScanScreen(
             viewModel = scanner,
             onSaved = { uri ->
@@ -164,6 +184,7 @@ private fun App(
                 organizer.discard()
                 organizeFrom = -1
             },
+            onScan = { scanInto = -1 },
             onSaved = { saved ->
                 organizer.discard()
                 organizeFrom = -1
@@ -192,6 +213,12 @@ private fun App(
                 onBack = { home = true },
                 onPageChanged = { page -> recents.updatePage(current, page) },
                 onOrganize = { page -> organizeFrom = page },
+                onScanInto = { page ->
+                    // The pages go in through the organizer, which opens once they're scanned.
+                    organizer.start(current, nameOf(current), viewer.password)
+                    organizeFrom = page
+                    scanInto = page
+                },
                 onSavedAs = { copy ->
                     // The copy has the changes; the original stays as it was on disk.
                     viewer.close()

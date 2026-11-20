@@ -115,6 +115,8 @@ fun ViewerScreen(
     onOrganize: ((currentPage: Int) -> Unit)? = null,
     onSavedAs: (Uri) -> Unit = {},
     tabs: TabsUi? = null,
+    /** Scans pages to insert after the given page (through the page organizer). */
+    onScanInto: ((currentPage: Int) -> Unit)? = null,
 ) {
     val state by viewModel.state.collectAsState()
     when (val s = state) {
@@ -124,7 +126,7 @@ fun ViewerScreen(
         is ViewerState.Error -> ErrorScreen(s.message, onBack)
         is ViewerState.NeedsPassword -> PasswordDialog(s.wrongPassword, viewModel::submitPassword, onBack)
         is ViewerState.Ready -> key(s.document.uri) {
-            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs, tabs)
+            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs, tabs, onScanInto)
         }
     }
 }
@@ -145,6 +147,7 @@ private fun DocumentScreen(
     onOrganize: ((Int) -> Unit)?,
     onSavedAs: (Uri) -> Unit,
     tabs: TabsUi?,
+    onScanInto: ((Int) -> Unit)?,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -453,6 +456,11 @@ private fun DocumentScreen(
                                 onOrganize = {
                                     if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
                                     else onOrganize?.invoke(currentPage)
+                                },
+                                onScanInto = {
+                                    // Like organizing, this rewrites the file: unsaved annotations first.
+                                    if (annotate.dirty) unsavedPrompt = { onScanInto?.invoke(currentPage) ?: Unit } to false
+                                    else onScanInto?.invoke(currentPage)
                                 },
                                 onPaged = ::setPaged,
                                 onShare = { share() },

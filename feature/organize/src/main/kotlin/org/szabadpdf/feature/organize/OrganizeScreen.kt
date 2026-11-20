@@ -99,6 +99,8 @@ fun OrganizeScreen(
     initialPage: Int,
     onClose: () -> Unit,
     onSaved: (Uri) -> Unit,
+    /** Opens the scanner; the scanned pages come back through [OrganizeViewModel.insertDocument]. */
+    onScan: (() -> Unit)? = null,
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
@@ -180,6 +182,7 @@ fun OrganizeScreen(
                         enabled = ready,
                         onBlank = viewModel::insertBlank,
                         onFromPdf = { insertPicker.launch(arrayOf("application/pdf")) },
+                        onScan = onScan,
                     )
                     if (selecting) {
                         IconButton(onClick = viewModel::selectAll) { Icon(Icons.Filled.SelectAll, "Select all") }
@@ -389,7 +392,7 @@ private fun PageCell(
 }
 
 @Composable
-private fun AddMenu(enabled: Boolean, onBlank: () -> Unit, onFromPdf: () -> Unit) {
+private fun AddMenu(enabled: Boolean, onBlank: () -> Unit, onFromPdf: () -> Unit, onScan: (() -> Unit)?) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }, enabled = enabled) { Icon(Icons.Filled.Add, "Add pages") }
@@ -402,6 +405,12 @@ private fun AddMenu(enabled: Boolean, onBlank: () -> Unit, onFromPdf: () -> Unit
                 open = false
                 onFromPdf()
             })
+            if (onScan != null) {
+                DropdownMenuItem(text = { Text("Scan pages…") }, onClick = {
+                    open = false
+                    onScan()
+                })
+            }
         }
     }
 }

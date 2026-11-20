@@ -57,6 +57,9 @@ data class LiveOutline(val corners: Corners?, val frameWidth: Int, val frameHeig
 
 sealed interface ScanEvent {
     data class Saved(val uri: Uri) : ScanEvent
+
+    /** The pages, as a PDF file in the cache, to be added to another document. */
+    data class PagesReady(val pdf: File) : ScanEvent
     data class Message(val text: String) : ScanEvent
 }
 
@@ -232,6 +235,34 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 _events.send(ScanEvent.Message("Couldn't save: ${e.message ?: e.javaClass.simpleName}"))
             } finally {
                 out.delete()
+                _state.update { it.copy(saving = false) }
+            }
+        }
+    }
+
+    /**
+     * Instead of saving a new file, hands the pages over (as a temporary PDF) to be added to
+     * an existing document. Earlier hand-overs are cleared out first.
+     */
+    fun finishForInsert() {
+        val pages = _state.value.pages
+        if (pages.isEmpty() || _state.value.saving) return
+        _state.update { it.copy(saving = true) }
+        viewModelScope.launch {
+            try {
+                val dir = File(getApplication<Application>().cacheDir, "scan-inserts")
+                withContext(Dispatchers.IO) {
+                    dir.deleteRecursively()
+                    dir.mkdirs()
+                }
+                val out = File(dir, "scan-${System.currentTimeMillis()}.pdf")
+                ImagePdf.write(pages.map { it.result }, out, "Scanned pages")
+                _events.send(ScanEvent.PagesReady(out))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _events.send(ScanEvent.Message("Couldn't prepare the pages: ${e.message ?: e.javaClass.simpleName}"))
+            } finally {
                 _state.update { it.copy(saving = false) }
             }
         }

@@ -49,9 +49,17 @@ import java.util.Locale
 /**
  * The scanner: camera (or photo import), then review, then save as PDF. [onSaved] gets the new
  * file; [onClose] is called after the user leaves (unsaved pages are discarded first).
+ *
+ * With [onPages], the pages are added to an existing document instead of saved: [onPages] gets
+ * them as a temporary PDF file.
  */
 @Composable
-fun ScanScreen(viewModel: ScanViewModel, onSaved: (Uri) -> Unit, onClose: () -> Unit) {
+fun ScanScreen(
+    viewModel: ScanViewModel,
+    onSaved: (Uri) -> Unit,
+    onClose: () -> Unit,
+    onPages: ((java.io.File) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val state by viewModel.state.collectAsState()
@@ -62,10 +70,15 @@ fun ScanScreen(viewModel: ScanViewModel, onSaved: (Uri) -> Unit, onClose: () -> 
         mutableStateOf(context.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
     val currentOnSaved by rememberUpdatedState(onSaved)
+    val currentOnPages by rememberUpdatedState(onPages)
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
+                is ScanEvent.PagesReady -> {
+                    viewModel.discard()
+                    currentOnPages?.invoke(event.pdf)
+                }
                 is ScanEvent.Saved -> {
                     viewModel.discard()
                     currentOnSaved(event.uri)
@@ -110,7 +123,12 @@ fun ScanScreen(viewModel: ScanViewModel, onSaved: (Uri) -> Unit, onClose: () -> 
                 state = state,
                 viewModel = viewModel,
                 onAddMore = { if (hasCamera) reviewing = false else gallery.launch(imagesOnly()) },
-                onSave = { saveAs.launch(defaultName()) },
+                onSave = { if (onPages != null) viewModel.finishForInsert() else saveAs.launch(defaultName()) },
+                saveLabel = when {
+                    onPages == null -> "Save PDF"
+                    state.pages.size == 1 -> "Add 1 page"
+                    else -> "Add ${state.pages.size} pages"
+                },
             )
             hasCamera -> CameraScreen(viewModel, onReview = { reviewing = true }, onClose = ::leave)
             else -> NoCamera(
