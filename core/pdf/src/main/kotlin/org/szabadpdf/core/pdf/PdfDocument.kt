@@ -335,6 +335,38 @@ class PdfDocument private constructor(
         }
     }
 
+    /** Whether the file is encrypted (needs a password to open). */
+    suspend fun isEncrypted(): Boolean = onEngine {
+        val pdf = doc as? PDFDocument ?: return@onEngine false
+        !pdf.trailer.get("Encrypt").isNull
+    }
+
+    /**
+     * Like [saveTo], but sets the password needed to open the file: AES-256 encryption with
+     * [newPassword], or none when it's null. The file is rewritten in full. Afterwards this
+     * instance must be closed and the file reopened (with the new password).
+     */
+    suspend fun saveWithPassword(context: Context, uri: Uri, newPassword: String?) = onEngine {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be saved")
+        require(newPassword == null || (newPassword.isNotEmpty() && ',' !in newPassword)) {
+            "Passwords can't be empty or contain commas"
+        }
+        val dir = File(context.cacheDir, "saving").apply { mkdirs() }
+        val file = File.createTempFile("save", ".pdf", dir)
+        try {
+            val options = if (newPassword == null) {
+                "decrypt,garbage=compact,compress"
+            } else {
+                "encrypt=aes-256,user-password=$newPassword,owner-password=$newPassword,garbage=compact,compress"
+            }
+            pdf.save(file.path, options)
+            verifySaved(file, bounds.size, newPassword)
+            DocumentFiles.replaceBlocking(context, uri, file)
+        } finally {
+            file.delete()
+        }
+    }
+
     /** Whether there are edits not yet written to the file. */
     suspend fun hasUnsavedChanges(): Boolean = onEngine { (doc as? PDFDocument)?.hasUnsavedChanges() == true }
 
@@ -588,7 +620,7 @@ class PdfDocument private constructor(
     }
 
     /** Reopens a written file to make sure it's readable and has every page. */
-    private fun verifySaved(file: File, expectedPages: Int) {
+    private fun verifySaved(file: File, expectedPages: Int, password: String? = this.password) {
         val check = Document.openDocument(file.path)
         try {
             val readable = !check.needsPassword() || password?.let(check::authenticatePassword) == true
@@ -686,7 +718,7 @@ class PdfDocument private constructor(
         /**
          * Writes a copy of the PDF [input] with its annotations and form fields drawn into the
          * pages themselves, for printing: some printing paths (Android's own PDF renderer among
-         * them) leave annotations out.
+         * them) leave annotations out. The copy is never encrypted, for the same reason.
          */
         suspend fun flatten(input: File, output: File, password: String? = null) = withContext(PdfEngine.dispatcher) {
             val doc = Document.openDocument(input.path) as? PDFDocument
@@ -697,7 +729,8 @@ class PdfDocument private constructor(
                 }
                 doc.bake(true, true)
                 output.parentFile?.mkdirs()
-                doc.save(output.path, "garbage,compress")
+                // Unencrypted: printing goes through renderers that can't open protected files.
+                doc.save(output.path, "decrypt,garbage,compress")
             } finally {
                 doc.destroy()
             }

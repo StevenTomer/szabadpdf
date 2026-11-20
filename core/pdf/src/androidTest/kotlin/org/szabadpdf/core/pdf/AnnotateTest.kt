@@ -174,4 +174,37 @@ class AnnotateTest {
         doc = PdfDocument.open(context, Uri.fromFile(file))
         assertEquals("remember me", doc.annotationAt(0, PdfPoint(410f, 110f))?.contents)
     }
+
+    @Test
+    fun addsChangesAndRemovesPasswords() = runBlocking {
+        assertFalse(doc.isEncrypted())
+        doc.addNote(0, PdfPoint(400f, 100f), "secret note")
+        doc.saveWithPassword(context, Uri.fromFile(file), "open sesame")
+        doc.close()
+
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        assertTrue("needs the password now", doc.isLocked)
+        assertFalse(doc.authenticate("wrong"))
+        assertTrue(doc.authenticate("open sesame"))
+        assertTrue(doc.isEncrypted())
+        assertEquals("unsaved edits went in too", "secret note", doc.annotationAt(0, PdfPoint(410f, 110f))?.contents)
+
+        // Printing copies come out unencrypted, annotations drawn in.
+        val flat = File(context.cacheDir, "flat-protected.pdf").apply { delete() }
+        PdfDocument.flatten(file, flat, "open sesame")
+        PdfDocument.open(context, Uri.fromFile(flat)).also { extra += it }.let { assertFalse(it.isLocked) }
+
+        doc.saveWithPassword(context, Uri.fromFile(file), "new one")
+        doc.close()
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        assertFalse(doc.authenticate("open sesame"))
+        assertTrue(doc.authenticate("new one"))
+
+        doc.saveWithPassword(context, Uri.fromFile(file), null)
+        doc.close()
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        assertFalse("no password any more", doc.isLocked)
+        assertFalse(doc.isEncrypted())
+        assertEquals(12, doc.pageCount)
+    }
 }
