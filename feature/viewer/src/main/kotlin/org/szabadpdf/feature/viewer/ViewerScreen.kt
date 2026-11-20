@@ -518,6 +518,7 @@ private fun DocumentScreen(
                                 onSaveAs = { copyPicker.launch(info.name) },
                                 onPrint = { print() },
                                 onPassword = { showProtect = true },
+                                onCompress = viewModel::compress,
                             )
                         },
                         colors = barColors,
@@ -733,7 +734,33 @@ private fun DocumentScreen(
         )
     }
 
-    if (annotate.saving) SavingDialog()
+    val compressed by viewModel.compressed.collectAsState()
+    val compressedCopyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult viewModel.dismissCompressed()
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.keepCompressed(uri)
+    }
+    var pickingCompressedCopy by remember { mutableStateOf(false) }
+    compressed?.takeIf { !pickingCompressedCopy }?.let { result ->
+        CompressedDialog(
+            before = result.before,
+            after = result.after,
+            canOverwrite = annotate.canOverwrite,
+            onReplace = { viewModel.keepCompressed() },
+            onSaveCopy = {
+                pickingCompressedCopy = true
+                compressedCopyPicker.launch(info.name.removeSuffix(".pdf").removeSuffix(".PDF") + " (smaller).pdf")
+            },
+            onDismiss = viewModel::dismissCompressed,
+        )
+    }
+    LaunchedEffect(compressed) { if (compressed == null) pickingCompressedCopy = false }
+
+    if (annotate.saving) SavingDialog(annotate.working ?: "Saving…")
 }
 
 private fun copyToClipboard(context: android.content.Context, text: String) {

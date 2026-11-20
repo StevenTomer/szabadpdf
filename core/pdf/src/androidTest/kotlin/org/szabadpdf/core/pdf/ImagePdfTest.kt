@@ -77,4 +77,28 @@ class ImagePdfTest {
             doc.close()
         }
     }
+
+    @Test
+    fun compressingShrinksBigImages() = runBlocking {
+        // A 3000 x 4000 photo-like page (noisy, so JPEG can't make it tiny), at high quality.
+        val bitmap = Bitmap.createBitmap(3000, 4000, Bitmap.Config.ARGB_8888)
+        val random = java.util.Random(1)
+        val pixels = IntArray(3000 * 4000) { Color.rgb(200 + random.nextInt(40), 200 + random.nextInt(40), 190 + random.nextInt(40)) }
+        bitmap.setPixels(pixels, 0, 3000, 0, 0, 3000, 4000)
+        val photo = File(context.cacheDir, "big.jpg").apply { outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 95, it) } }
+        val original = File(context.cacheDir, "big.pdf").apply { delete() }
+        ImagePdf.write(context, listOf(photo), original)
+
+        val small = File(context.cacheDir, "big-small.pdf").apply { delete() }
+        PdfDocument.compress(original, small)
+        assertTrue("${original.length()} -> ${small.length()}", small.length() < original.length() / 2)
+        val doc = PdfDocument.open(context, Uri.fromFile(small))
+        try {
+            assertEquals(1, doc.pageCount)
+            val page = doc.renderPage(0, 300)
+            assertTrue("still the light photo", Color.red(page.getPixel(150, 200)) > 150)
+        } finally {
+            doc.close()
+        }
+    }
 }

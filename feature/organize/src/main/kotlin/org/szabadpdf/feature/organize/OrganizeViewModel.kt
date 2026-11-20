@@ -373,44 +373,109 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         val destination = target ?: original
         _state.update { it.copy(status = OrganizeStatus.Saving) }
         viewModelScope.launch {
-            val app = getApplication<Application>()
-            val dir = File(app.cacheDir, "saving").apply { mkdirs() }
-            val output = File(dir, "out-${System.nanoTime()}.pdf")
-            // A fresh copy is rebuilt and written out, so the one showing thumbnails stays
-            // untouched if anything goes wrong.
-            var fresh: PdfDocument? = null
-            // Extra copies of the document's own pages come from a second fresh instance.
-            var copiesSource: PdfDocument? = null
             try {
-                val doc = openDocument(original, password).also { fresh = it }
-                val used = HashSet<Int>()
-                val specs = s.pages.map { page ->
-                    when (page.source) {
-                        EditPage.BLANK -> PageSpec.Blank(page.size, page.rotation)
-                        EditPage.MAIN -> if (used.add(page.index)) {
-                            PageSpec.Existing(page.index, rotation = page.rotation)
-                        } else {
-                            val from = copiesSource ?: openDocument(original, password).also { copiesSource = it }
-                            PageSpec.Existing(page.index, from = from, rotation = page.rotation)
-                        }
-                        else -> PageSpec.Existing(page.index, from = documentFor(page.source), rotation = page.rotation)
-                    }
-                }
-                doc.saveRearranged(specs, output)
-                doc.close()
-                fresh = null
-                DocumentFiles.replace(app, destination, output)
+                writePages(original, s.pages, destination)
                 _events.send(OrganizeEvent.Saved(destination))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.update { it.copy(status = OrganizeStatus.Ready) }
                 _events.send(OrganizeEvent.Message("Couldn't save: ${e.message ?: e.javaClass.simpleName}"))
-            } finally {
-                fresh?.close()
-                copiesSource?.close()
-                output.delete()
             }
+        }
+    }
+
+    /** Saves the selected pages, in order, as a new PDF at [target]; the document stays open. */
+    fun extractSelected(target: Uri) {
+        val original = uri ?: return
+        val s = _state.value
+        val pages = s.pages.filter { it.id in s.selected }
+        if (pages.isEmpty() || s.status != OrganizeStatus.Ready) return
+        _state.update { it.copy(status = OrganizeStatus.Saving) }
+        viewModelScope.launch {
+            val result = runCatching { writePages(original, pages, target) }
+            _state.update { it.copy(status = OrganizeStatus.Ready) }
+            _events.send(
+                OrganizeEvent.Message(
+                    result.fold(
+                        { "Saved ${pages.size} page${if (pages.size == 1) "" else "s"} as a new PDF" },
+                        { "Couldn't save: ${it.message ?: it.javaClass.simpleName}" },
+                    ),
+                ),
+            )
+        }
+    }
+
+    /**
+     * Writes the pages (as arranged) into new PDFs of [pagesPerFile] pages each, in the folder
+     * [folder] (a document tree the user picked).
+     */
+    fun split(folder: Uri, pagesPerFile: Int) {
+        val original = uri ?: return
+        val s = _state.value
+        if (s.status != OrganizeStatus.Ready || pagesPerFile < 1) return
+        _state.update { it.copy(status = OrganizeStatus.Saving) }
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val parts = s.pages.chunked(pagesPerFile)
+            val base = s.name.removeSuffix(".pdf").removeSuffix(".PDF").ifBlank { "Document" }
+            val result = runCatching {
+                val parent = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                    folder, android.provider.DocumentsContract.getTreeDocumentId(folder),
+                )
+                parts.forEachIndexed { i, pages ->
+                    val file = android.provider.DocumentsContract.createDocument(
+                        app.contentResolver, parent, "application/pdf", "$base (part ${i + 1}).pdf",
+                    ) ?: error("Couldn't create a file in that folder")
+                    writePages(original, pages, file)
+                }
+            }
+            _state.update { it.copy(status = OrganizeStatus.Ready) }
+            _events.send(
+                OrganizeEvent.Message(
+                    result.fold(
+                        { "Split into ${parts.size} file${if (parts.size == 1) "" else "s"}" },
+                        { "Couldn't split: ${it.message ?: it.javaClass.simpleName}" },
+                    ),
+                ),
+            )
+        }
+    }
+
+    /**
+     * Writes [pages] of [original] (as edited here) to [destination]. A fresh copy of the
+     * document is rebuilt and written out, so the one showing thumbnails stays untouched if
+     * anything goes wrong.
+     */
+    private suspend fun writePages(original: Uri, pages: List<EditPage>, destination: Uri) {
+        val app = getApplication<Application>()
+        val output = File(File(app.cacheDir, "saving").apply { mkdirs() }, "out-${System.nanoTime()}.pdf")
+        var fresh: PdfDocument? = null
+        // Extra copies of the document's own pages come from a second fresh instance.
+        var copiesSource: PdfDocument? = null
+        try {
+            val doc = openDocument(original, password).also { fresh = it }
+            val used = HashSet<Int>()
+            val specs = pages.map { page ->
+                when (page.source) {
+                    EditPage.BLANK -> PageSpec.Blank(page.size, page.rotation)
+                    EditPage.MAIN -> if (used.add(page.index)) {
+                        PageSpec.Existing(page.index, rotation = page.rotation)
+                    } else {
+                        val from = copiesSource ?: openDocument(original, password).also { copiesSource = it }
+                        PageSpec.Existing(page.index, from = from, rotation = page.rotation)
+                    }
+                    else -> PageSpec.Existing(page.index, from = documentFor(page.source), rotation = page.rotation)
+                }
+            }
+            doc.saveRearranged(specs, output)
+            doc.close()
+            fresh = null
+            DocumentFiles.replace(app, destination, output)
+        } finally {
+            fresh?.close()
+            copiesSource?.close()
+            output.delete()
         }
     }
 

@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.VerticalAlignBottom
@@ -135,6 +137,15 @@ fun OrganizeScreen(
     }
     fun saveCopy() = copyPicker.launch(copyName(state.name))
 
+    val extractPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        uri?.let(viewModel::extractSelected)
+    }
+    var splitDialog by rememberSaveable { mutableStateOf(false) }
+    var splitSize by rememberSaveable { mutableStateOf(1) }
+    val splitFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { folder ->
+        folder?.let { viewModel.split(it, splitSize) }
+    }
+
     fun leave() {
         when {
             state.selected.isNotEmpty() -> viewModel.clearSelection()
@@ -194,6 +205,7 @@ fun OrganizeScreen(
                             onSave = { viewModel.save() },
                             onSaveCopy = ::saveCopy,
                         )
+                        OrganizeMoreMenu(enabled = ready && state.pages.size > 1, onSplit = { splitDialog = true })
                     }
                 },
             )
@@ -215,6 +227,9 @@ fun OrganizeScreen(
                             Icon(Icons.Filled.VerticalAlignBottom, "Move to end")
                         }
                         IconButton(onClick = viewModel::duplicateSelected) { Icon(Icons.Filled.ContentCopy, "Duplicate") }
+                        IconButton(onClick = { extractPicker.launch(extractName(state.name)) }) {
+                            Icon(Icons.Filled.FileCopy, "Save selected pages as a new PDF")
+                        }
                         IconButton(onClick = viewModel::deleteSelected) { Icon(Icons.Filled.Delete, "Delete") }
                     }
                 }
@@ -239,6 +254,18 @@ fun OrganizeScreen(
     }
 
     if (state.status == OrganizeStatus.Saving) SavingDialog()
+
+    if (splitDialog) {
+        SplitDialog(
+            pageCount = state.pages.size,
+            onSplit = { size ->
+                splitDialog = false
+                splitSize = size
+                splitFolder.launch(null)
+            },
+            onDismiss = { splitDialog = false },
+        )
+    }
 
     state.unlock?.let { request ->
         UnlockDialog(request, onUnlock = viewModel::unlock, onSkip = { viewModel.unlock(null) })
@@ -476,4 +503,56 @@ private fun pageCountLabel(count: Int) = if (count == 1) "1 page" else "$count p
 private fun copyName(name: String): String {
     val base = name.removeSuffix(".pdf").removeSuffix(".PDF").ifBlank { "Document" }
     return "$base (edited).pdf"
+}
+
+@Composable
+private fun OrganizeMoreMenu(enabled: Boolean, onSplit: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text("Split into files…") }, enabled = enabled, onClick = {
+                open = false
+                onSplit()
+            })
+        }
+    }
+}
+
+/** How many pages go in each file when splitting; then a folder is picked. */
+@Composable
+private fun SplitDialog(pageCount: Int, onSplit: (Int) -> Unit, onDismiss: () -> Unit) {
+    var text by rememberSaveable { mutableStateOf("1") }
+    val size = text.toIntOrNull()?.takeIf { it in 1 until pageCount }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Split into files") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                androidx.compose.material3.OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it.filter(Char::isDigit).take(5) },
+                    label = { Text("Pages in each file") },
+                    singleLine = true,
+                    isError = size == null,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                    ),
+                )
+                Text(
+                    if (size == null) "Between 1 and ${pageCount - 1}"
+                    else "Makes ${(pageCount + size - 1) / size} files. Next, pick the folder to put them in.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { size?.let(onSplit) }, enabled = size != null) { Text("Choose folder") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun extractName(name: String): String {
+    val base = name.removeSuffix(".pdf").removeSuffix(".PDF").ifBlank { "Document" }
+    return "$base (pages).pdf"
 }

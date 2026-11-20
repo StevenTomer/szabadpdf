@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Lock
@@ -135,6 +136,7 @@ internal fun MoreMenu(
     onSaveAs: () -> Unit,
     onPrint: () -> Unit,
     onPassword: () -> Unit,
+    onCompress: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     fun pick(action: () -> Unit) = {
@@ -181,6 +183,11 @@ internal fun MoreMenu(
                 )
             }
             if (canSave) {
+                DropdownMenuItem(
+                    text = { Text("Reduce file size…") },
+                    leadingIcon = { Icon(Icons.Filled.Compress, null) },
+                    onClick = pick(onCompress),
+                )
                 DropdownMenuItem(
                     text = { Text("Password…") },
                     leadingIcon = { Icon(Icons.Filled.Lock, null) },

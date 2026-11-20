@@ -648,26 +648,28 @@ class PdfDocument private constructor(
      */
     private fun copyAnnotations(src: PDFDocument, index: Int, target: PDFObject) {
         val pdf = doc as PDFDocument
-        val annots = src.findPage(index).get("Annots").resolve()
+        // MuPDF's Java resolve() wrappers can release objects they don't own, which loses
+        // them from the saved file; get(), put() and delete() follow references by themselves.
+        val annots = src.findPage(index).get("Annots")
         if (annots.isNull || !annots.isArray || annots.size() == 0) return
         val keep = (0 until annots.size()).map { annots.get(it) }.filter {
-            val type = it.resolve().get("Subtype").asName()
+            val type = it.get("Subtype").asName()
             type != "Link" && type != "Widget"
         }
         if (keep.isEmpty()) return
         // Each annotation points back to its page (/P), and from there to the whole page tree;
         // cut those links first so only the annotations themselves are copied.
-        keep.forEach { it.resolve().delete("P") }
+        keep.forEach { it.delete("P") }
         // A map of its own, so a page copied twice gets two sets of annotations, not one shared.
         val map = pdf.newPDFGraftMap()
         try {
             val copies = pdf.newArray()
             for (annot in keep) {
                 val copy = map.graftObject(annot)
-                copy.resolve().put("P", target)
+                copy.put("P", target)
                 copies.push(copy)
             }
-            target.resolve().put("Annots", copies)
+            target.put("Annots", copies)
         } finally {
             map.destroy()
         }
@@ -788,6 +790,103 @@ class PdfDocument private constructor(
             } finally {
                 doc.destroy()
             }
+        }
+
+        /**
+         * Writes a smaller copy of the PDF [input] to [output]: large JPEG images are scaled down
+         * so their longest side is at most [maxImageSide] pixels and re-encoded at [quality];
+         * fonts are cut down to the characters used; duplicate objects are merged and
+         * everything is compressed. An image is only replaced when that makes it smaller, and
+         * images with transparency or masks are left as they are.
+         */
+        suspend fun compress(
+            input: File,
+            output: File,
+            password: String? = null,
+            maxImageSide: Int = 2000,
+            quality: Int = 75,
+        ) = withContext(PdfEngine.dispatcher) {
+            val doc = Document.openDocument(input.path) as? PDFDocument
+                ?: throw UnsupportedOperationException("Only PDF files can be compressed")
+            try {
+                if (doc.needsPassword() && (password == null || !doc.authenticatePassword(password))) {
+                    throw SecurityException("Wrong password")
+                }
+                run {
+                    // Images are found through each page's resources (and those of drawings
+                    // nested in them), never by walking raw object numbers, which can upset
+                    // MuPDF's view of some files.
+                    val seen = HashSet<Int>()
+                    fun visit(resources: PDFObject) {
+                        // get() follows references itself; resolve() wrappers are avoided here.
+                        val xObjects = resources.get("XObject")
+                        if (!xObjects.isDictionary) return
+                        for (key in xObjects) {
+                            val ref = xObjects.get(key)
+                            if (ref.isIndirect && !seen.add(ref.asIndirect())) continue
+                            when (ref.get("Subtype").asName()) {
+                                "Image" -> runCatching { shrinkImage(doc, ref, maxImageSide, quality) }
+                                "Form" -> visit(ref.get("Resources"))
+                            }
+                        }
+                    }
+                    for (i in 0 until doc.countPages()) runCatching { visit(doc.findPage(i).getInheritable("Resources")) }
+                }
+                runCatching { doc.subsetFonts() }
+                output.parentFile?.mkdirs()
+                doc.save(output.path, "garbage=deduplicate,compress")
+            } finally {
+                doc.destroy()
+            }
+        }
+
+        private fun shrinkImage(doc: PDFDocument, ref: PDFObject, maxSide: Int, quality: Int) {
+            val obj = ref
+            if (!obj.isStream || obj.get("Subtype").asName() != "Image") return
+            val filter = obj.get("Filter").let { if (it.isArray && it.size() == 1) it.get(0) else it }
+            if (filter.asName() != "DCTDecode") return
+            if (!obj.get("SMask").isNull || !obj.get("Mask").isNull || obj.get("ImageMask").asBoolean()) return
+            // Grey or colour only (CMYK and others are left alone). Asked of the decoded image:
+            // the colour space entry may be a reference, which can't be inspected safely here.
+            val components = doc.loadImage(ref).let { image ->
+                try {
+                    image.numberOfComponents
+                } finally {
+                    image.destroy()
+                }
+            }
+            if (components != 1 && components != 3) return
+            val width = obj.get("Width").asInteger()
+            val height = obj.get("Height").asInteger()
+            if (maxOf(width, height) <= maxSide) return
+
+            val original = obj.readRawStream()
+            var sample = 1
+            while (maxOf(width, height) / (sample * 2) >= maxSide) sample *= 2
+            val decoded = android.graphics.BitmapFactory.decodeByteArray(
+                original, 0, original.size, android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+            ) ?: return
+            val scale = maxSide.toFloat() / maxOf(decoded.width, decoded.height)
+            val scaled = if (scale < 1f) {
+                android.graphics.Bitmap.createScaledBitmap(
+                    decoded, (decoded.width * scale).toInt().coerceAtLeast(1), (decoded.height * scale).toInt().coerceAtLeast(1), true,
+                ).also { if (it !== decoded) decoded.recycle() }
+            } else decoded
+            val jpeg = java.io.ByteArrayOutputStream().use {
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, it)
+                it.toByteArray()
+            }
+            val (newWidth, newHeight) = scaled.width to scaled.height
+            scaled.recycle()
+            if (jpeg.size >= original.size) return
+            // Android writes colour (YCbCr) JPEGs, so the image becomes RGB.
+            obj.writeRawStream(com.artifex.mupdf.fitz.Buffer().apply { writeBytes(jpeg) })
+            obj.put("Width", newWidth)
+            obj.put("Height", newHeight)
+            obj.put("ColorSpace", doc.newName("DeviceRGB"))
+            obj.put("BitsPerComponent", 8)
+            obj.delete("DecodeParms")
+            obj.delete("Decode")
         }
 
         private fun openDirect(resolver: ContentResolver, uri: Uri): FdSeekableInputStream? {

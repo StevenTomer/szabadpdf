@@ -338,13 +338,13 @@ internal fun UnsavedChangesDialog(onSave: () -> Unit, onDiscard: (() -> Unit)?, 
 }
 
 @Composable
-internal fun SavingDialog() {
+internal fun SavingDialog(text: String = "Saving…") {
     Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
         Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
             Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator()
                 Spacer(Modifier.size(16.dp))
-                Text("Saving…")
+                Text(text)
             }
         }
     }
@@ -478,4 +478,45 @@ internal fun ChoiceFieldDialog(field: org.szabadpdf.core.pdf.FormField, onChoose
         confirmButton = {},
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** The outcome of reducing the file size: keep the smaller file, or not. */
+@Composable
+internal fun CompressedDialog(
+    before: Long,
+    after: Long,
+    canOverwrite: Boolean,
+    onReplace: () -> Unit,
+    onSaveCopy: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val worthIt = after < before * 0.95
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (worthIt) "Smaller file ready" else "Already compact") },
+        text = {
+            Text(
+                if (worthIt) "${size(before)} → ${size(after)} (${100 - after * 100 / before}% smaller). " +
+                    "Large images were scaled down to about 200 dpi."
+                else "This PDF can't be made noticeably smaller (${size(before)} → ${size(after)}).",
+            )
+        },
+        confirmButton = {
+            if (worthIt) {
+                Row {
+                    if (canOverwrite) TextButton(onClick = onReplace) { Text("Replace original") }
+                    TextButton(onClick = onSaveCopy) { Text("Save as copy…") }
+                }
+            } else {
+                TextButton(onClick = onDismiss) { Text("OK") }
+            }
+        },
+        dismissButton = { if (worthIt) TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+private fun size(bytes: Long): String = when {
+    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
+    bytes >= 1_000 -> "${bytes / 1_000} kB"
+    else -> "$bytes bytes"
 }

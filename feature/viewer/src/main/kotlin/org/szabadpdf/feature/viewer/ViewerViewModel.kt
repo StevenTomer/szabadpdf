@@ -97,6 +97,8 @@ data class AnnotateState(
     val saving: Boolean = false,
     val canOverwrite: Boolean = false,
     val editable: Boolean = false,
+    /** What's in progress, if it's not just saving. */
+    val working: String? = null,
     /** The file needs a password to open. */
     val encrypted: Boolean = false,
     /** Opened from a draft with edits from an earlier session (which can't be undone step by step). */
@@ -681,6 +683,83 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             } catch (e: Exception) {
                 _annotate.update { it.copy(saving = false) }
                 report("Couldn't save", e)
+            }
+        }
+    }
+
+    // --- reducing file size ------------------------------------------------------------------
+
+    /** A compressed copy, waiting for the user to keep it (or not). */
+    data class Compressed(val file: java.io.File, val before: Long, val after: Long)
+
+    private val _compressed = MutableStateFlow<Compressed?>(null)
+    val compressed: StateFlow<Compressed?> = _compressed.asStateFlow()
+
+    /** Makes a smaller copy (unsaved edits included) and offers it via [compressed]. */
+    fun compress() {
+        val current = uri ?: return
+        if (_annotate.value.saving) return
+        _annotate.update { it.copy(saving = true, working = "Reducing file size…") }
+        viewModelScope.launch {
+            try {
+                val app = getApplication<Application>()
+                val copy = exportCopy() ?: return@launch
+                val out = java.io.File(java.io.File(app.cacheDir, "compress").apply { deleteRecursively(); mkdirs() }, copy.name)
+                PdfDocument.compress(copy, out, password)
+                val before = runCatching {
+                    app.contentResolver.openFileDescriptor(current, "r")?.use { it.statSize }
+                }.getOrNull()?.takeIf { it > 0 } ?: copy.length()
+                _compressed.value = Compressed(out, before, out.length())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                report("Couldn't reduce the file size", e)
+            } finally {
+                _annotate.update { it.copy(saving = false, working = null) }
+            }
+        }
+    }
+
+    fun dismissCompressed() {
+        _compressed.value?.file?.delete()
+        _compressed.value = null
+    }
+
+    /** Keeps the smaller copy: over the open file, or as [target], a new file. */
+    fun keepCompressed(target: Uri? = null) {
+        val result = _compressed.value ?: return
+        val current = uri ?: return
+        _compressed.value = null
+        _annotate.update { it.copy(saving = true) }
+        viewModelScope.launch {
+            try {
+                DocumentFiles.replace(getApplication(), target ?: current, result.file)
+                if (target != null) {
+                    _annotate.update { it.copy(saving = false) }
+                    _events.send(ViewerEvent.SavedAs(target))
+                } else {
+                    // The file was replaced: carry on from it (edits are in it now).
+                    val old = document
+                    val fresh = PdfDocument.open(getApplication(), current)
+                    password?.let { fresh.authenticate(it) }
+                    document = fresh
+                    old?.close()
+                    outline = null
+                    deleteDraft(current)
+                    restoredDraft = false
+                    originalFingerprint = null
+                    pageCache.evictAll()
+                    _versions.update { v -> PageVersions(all = v.all + 1) }
+                    _annotate.update { it.copy(saving = false, edits = EditState(), restored = false) }
+                    _events.send(ViewerEvent.Saved)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _annotate.update { it.copy(saving = false) }
+                report("Couldn't save", e)
+            } finally {
+                result.file.delete()
             }
         }
     }
