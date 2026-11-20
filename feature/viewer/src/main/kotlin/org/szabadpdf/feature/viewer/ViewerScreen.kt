@@ -3,6 +3,23 @@ package org.szabadpdf.feature.viewer
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalDensity
+import org.szabadpdf.core.pdf.AnnotationInfo
+import org.szabadpdf.core.pdf.AnnotationKind
+import org.szabadpdf.core.pdf.MarkupKind
+import org.szabadpdf.core.pdf.PdfPoint
+import org.szabadpdf.core.pdf.TextSelection
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -94,6 +111,7 @@ fun ViewerScreen(
     onBack: () -> Unit,
     onPageChanged: (page: Int) -> Unit,
     onOrganize: ((currentPage: Int) -> Unit)? = null,
+    onSavedAs: (Uri) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     when (val s = state) {
@@ -103,10 +121,16 @@ fun ViewerScreen(
         is ViewerState.Error -> ErrorScreen(s.message, onBack)
         is ViewerState.NeedsPassword -> PasswordDialog(s.wrongPassword, viewModel::submitPassword, onBack)
         is ViewerState.Ready -> key(s.document.uri) {
-            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize)
+            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs)
         }
     }
 }
+
+/** An annotation tapped with the select tool (or a note tapped while reading). */
+private data class AnnotationTap(val page: Int, val info: AnnotationInfo)
+
+/** Where a new note goes, before its text is written. */
+private data class NewNote(val page: Int, val point: PdfPoint)
 
 @OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
@@ -116,24 +140,89 @@ private fun DocumentScreen(
     onBack: () -> Unit,
     onPageChanged: (Int) -> Unit,
     onOrganize: ((Int) -> Unit)?,
+    onSavedAs: (Uri) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = info.initialPage)
     val zoom = remember { ZoomState() }
     val search by viewModel.search.collectAsState()
+    val annotate by viewModel.annotate.collectAsState()
+    val versions by viewModel.versions.collectAsState()
+    val pendingInk by viewModel.pendingInk.collectAsState()
+    val selection by viewModel.selection.collectAsState()
+    val snackbar = remember { SnackbarHostState() }
     val pageCount = info.pageSizes.size
 
     var chromeVisible by rememberSaveable { mutableStateOf(true) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var showOutline by rememberSaveable { mutableStateOf(false) }
     var showGoTo by rememberSaveable { mutableStateOf(false) }
+    var showStyle by rememberSaveable { mutableStateOf(false) }
+    var newNote by remember { mutableStateOf<NewNote?>(null) }
+    var tapped by remember { mutableStateOf<AnnotationTap?>(null) }
+    /** Set while asking whether to save; runs once saved (or discarded, if allowed). */
+    var unsavedPrompt by remember { mutableStateOf<Pair<() -> Unit, Boolean>?>(null) }
+    var afterSave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    /** The word first selected by a long press, which dragging extends from. */
+    var dragAnchor by remember { mutableStateOf<TextSelection?>(null) }
 
     val currentPage by remember { derivedStateOf { zoom.currentPage(listState) } }
 
     LaunchedEffect(Unit) {
         snapshotFlow { currentPage }.distinctUntilChanged().debounce(400).collect(onPageChanged)
     }
+
+    val currentOnSavedAs by rememberUpdatedState(onSavedAs)
+    LaunchedEffect(viewModel) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is ViewerEvent.Message -> scope.launch { snackbar.showSnackbar(event.text) }
+                ViewerEvent.Saved -> {
+                    scope.launch { snackbar.showSnackbar("Saved") }
+                    afterSave?.invoke()
+                    afterSave = null
+                }
+                is ViewerEvent.SavedAs -> {
+                    afterSave = null
+                    currentOnSavedAs(event.uri)
+                }
+            }
+        }
+    }
+
+    val copyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        if (uri == null) {
+            afterSave = null
+            return@rememberLauncherForActivityResult
+        }
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.save(target = uri)
+    }
+
+    fun save(then: (() -> Unit)? = null) {
+        afterSave = then
+        if (annotate.canOverwrite) viewModel.save()
+        else copyPicker.launch(info.name.removeSuffix(".pdf").removeSuffix(".PDF") + " (annotated).pdf")
+    }
+
+    fun leave() {
+        when {
+            selection != null -> viewModel.clearSelection()
+            searchOpen -> {
+                searchOpen = false
+                viewModel.clearSearch()
+            }
+            annotate.active -> viewModel.setAnnotating(false)
+            annotate.dirty -> unsavedPrompt = onBack to true
+            else -> onBack()
+        }
+    }
+    BackHandler(onBack = ::leave)
 
     val systemBars = WindowInsets.systemBars.asPaddingValues()
     val contentPadding = PaddingValues(
@@ -168,6 +257,75 @@ private fun DocumentScreen(
         goTo(hit.page, yPt = r.top, xPt = (r.left + r.right) / 2f)
     }
 
+    val density = LocalDensity.current
+    val actions = remember(viewModel) {
+        object : PageActions {
+            /** Touch tolerance for tapping small annotations, in points on this page. */
+            fun slop(page: Int): Float = with(density) { 12.dp.toPx() } / zoom.scale *
+                info.pageSizes[page].width / zoom.viewport.width.coerceAtLeast(1)
+
+            override fun onTap(page: Int, point: PdfPoint) {
+                if (viewModel.selection.value != null) {
+                    viewModel.clearSelection()
+                    return
+                }
+                val state = viewModel.annotate.value
+                when (state.currentTool) {
+                    Tool.NOTE -> newNote = NewNote(page, PdfPoint(point.x - 12f, point.y - 12f))
+                    Tool.SELECT -> scope.launch {
+                        viewModel.annotationAt(page, point, slop(page))?.let { tapped = AnnotationTap(page, it) }
+                    }
+                    null -> scope.launch {
+                        val note = viewModel.annotationAt(page, point, slop(page))?.takeIf { it.kind == AnnotationKind.NOTE }
+                        if (note != null) {
+                            tapped = AnnotationTap(page, note)
+                            return@launch
+                        }
+                        when (val link = viewModel.linkAt(page, point.x, point.y)) {
+                            is LinkTarget.Page -> goTo(link.index)
+                            is LinkTarget.External -> openExternal(context, link.uri)
+                            null -> if (!searchOpen) chromeVisible = !chromeVisible
+                        }
+                    }
+                    else -> Unit
+                }
+            }
+
+            override fun onLongPress(page: Int, point: PdfPoint) {
+                dragAnchor = null
+                viewModel.selectWord(page, point)
+            }
+
+            override fun onLongPressDrag(page: Int, point: PdfPoint) {
+                val anchor = dragAnchor ?: viewModel.selection.value?.takeIf { it.page == page }?.also { dragAnchor = it }
+                    ?: return
+                // Extend from the long-pressed word towards the finger, in reading order.
+                val line = anchor.rects.first().let { it.bottom - it.top }
+                val forward = point.y > anchor.start.y + line / 2 ||
+                    (point.y > anchor.start.y - line / 2 && point.x >= anchor.start.x)
+                if (forward) viewModel.selectRange(page, anchor.start, point)
+                else viewModel.selectRange(page, point, anchor.end)
+            }
+
+            override fun onSelectionHandles(page: Int, start: PdfPoint, end: PdfPoint) =
+                viewModel.selectRange(page, start, end)
+
+            override fun onStroke(page: Int, points: List<PdfPoint>) = viewModel.addStroke(page, points)
+
+            override fun onErase(page: Int, points: List<PdfPoint>, radius: Float, gesture: Int) =
+                viewModel.erase(page, points, radius, gesture)
+
+            override fun onTextHighlight(page: Int, start: PdfPoint, end: PdfPoint, finished: Boolean) =
+                viewModel.highlightDrag(page, start, end, finished)
+
+            override fun onTextHighlightCancelled() = viewModel.clearSelection()
+
+            override fun onStylusSeen() = viewModel.onStylusSeen()
+        }
+    }
+
+    val showChrome = chromeVisible || annotate.active || selection != null
+
     Box(Modifier.fillMaxSize()) {
         DocumentView(
             pageSizes = info.pageSizes,
@@ -177,24 +335,38 @@ private fun DocumentScreen(
             contentPadding = contentPadding,
             searchHits = search.hits,
             currentHit = search.currentHit,
-            onTap = { page, x, y ->
-                scope.launch {
-                    when (val link = viewModel.linkAt(page, x, y)) {
-                        is LinkTarget.Page -> goTo(link.index)
-                        is LinkTarget.External -> openExternal(context, link.uri)
-                        null -> if (!searchOpen) chromeVisible = !chromeVisible
-                    }
-                }
-            },
+            layer = AnnotationLayer(
+                tool = annotate.currentTool,
+                inkStyle = annotate.inkStyle,
+                fingerDraws = annotate.fingerDraws,
+                pending = pendingInk,
+                selection = selection,
+                versions = versions,
+            ),
+            actions = actions,
         )
 
         AnimatedVisibility(
-            visible = chromeVisible || searchOpen,
+            visible = showChrome || searchOpen,
             enter = slideInVertically { -it } + fadeIn(),
             exit = slideOutVertically { -it } + fadeOut(),
         ) {
-            if (searchOpen) {
-                SearchBar(
+            val barColors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+            )
+            when {
+                selection != null -> SelectionBar(
+                    canMark = annotate.editable,
+                    onCopy = {
+                        selection?.text?.let { copyToClipboard(context, it) }
+                        viewModel.clearSelection()
+                    },
+                    onHighlight = { viewModel.markupSelection(MarkupKind.HIGHLIGHT) },
+                    onUnderline = { viewModel.markupSelection(MarkupKind.UNDERLINE) },
+                    onStrikeout = { viewModel.markupSelection(MarkupKind.STRIKEOUT) },
+                    onClose = viewModel::clearSelection,
+                )
+                searchOpen -> SearchBar(
                     state = search,
                     onSearch = { viewModel.search(it, fromPage = currentPage) },
                     onNext = viewModel::nextHit,
@@ -204,34 +376,71 @@ private fun DocumentScreen(
                         viewModel.clearSearch()
                     },
                 )
-            } else {
-                TopAppBar(
-                    title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                annotate.active -> TopAppBar(
+                    title = { Text("Annotate") },
                     navigationIcon = {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        IconButton(onClick = { viewModel.setAnnotating(false) }) { Icon(Icons.Filled.Check, "Done annotating") }
                     },
                     actions = {
+                        IconButton(onClick = viewModel::undo, enabled = annotate.edits.canUndo) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                        }
+                        IconButton(onClick = viewModel::redo, enabled = annotate.edits.canRedo) {
+                            Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                        }
+                        IconButton(onClick = { save() }, enabled = annotate.dirty) { Icon(Icons.Filled.Save, "Save") }
+                    },
+                    colors = barColors,
+                )
+                else -> TopAppBar(
+                    title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    },
+                    actions = {
+                        if (annotate.dirty) IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") }
                         IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
                         IconButton(onClick = { showOutline = true }) { Icon(Icons.AutoMirrored.Filled.List, "Contents") }
-                        if (onOrganize != null) {
-                            IconButton(onClick = { onOrganize(currentPage) }) { Icon(Icons.Filled.GridView, "Organize pages") }
+                        if (annotate.editable) {
+                            IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
+                        }
+                        if (onOrganize != null && annotate.editable) {
+                            IconButton(onClick = {
+                                if (annotate.dirty) unsavedPrompt = { onOrganize(currentPage) } to false
+                                else onOrganize(currentPage)
+                            }) { Icon(Icons.Filled.GridView, "Organize pages") }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
-                    ),
+                    colors = barColors,
                 )
             }
         }
 
         AnimatedVisibility(
-            visible = chromeVisible,
+            visible = annotate.active,
+            enter = slideInVertically { it },
+            exit = slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            AnnotateToolbar(
+                state = annotate,
+                onTool = { tool ->
+                    if (tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT)) showStyle = true
+                    else viewModel.selectTool(tool)
+                },
+                onStyle = { showStyle = true },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = showChrome,
             enter = fadeIn(),
             exit = fadeOut(),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
-                .padding(16.dp),
+                .padding(16.dp)
+                .padding(bottom = if (annotate.active) 64.dp else 0.dp),
         ) {
             Surface(
                 shape = MaterialTheme.shapes.extraLarge,
@@ -246,6 +455,14 @@ private fun DocumentScreen(
                 )
             }
         }
+
+        SnackbarHost(
+            snackbar,
+            Modifier
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(bottom = if (annotate.active) 72.dp else 56.dp),
+        )
     }
 
     if (showOutline) {
@@ -270,6 +487,82 @@ private fun DocumentScreen(
             },
         )
     }
+
+    if (showStyle) {
+        StyleSheet(
+            state = annotate,
+            onPen = viewModel::setPenStyle,
+            onHighlighter = viewModel::setHighlighterStyle,
+            onMarkupColor = viewModel::setMarkupColor,
+            onFingerDraws = viewModel::setFingerDraws,
+            onDismiss = { showStyle = false },
+        )
+    }
+
+    newNote?.let { note ->
+        NoteDialog(
+            initialText = "",
+            isNew = true,
+            onSave = { text ->
+                viewModel.addNote(note.page, note.point, text)
+                newNote = null
+            },
+            onDelete = null,
+            onDismiss = { newNote = null },
+        )
+    }
+
+    tapped?.let { t ->
+        if (t.info.kind == AnnotationKind.NOTE) {
+            NoteDialog(
+                initialText = t.info.contents,
+                isNew = false,
+                onSave = { text ->
+                    viewModel.setNoteText(t.page, t.info.id, text)
+                    tapped = null
+                },
+                onDelete = if (annotate.editable) {
+                    {
+                        viewModel.deleteAnnotation(t.page, t.info.id)
+                        tapped = null
+                    }
+                } else null,
+                onDismiss = { tapped = null },
+            )
+        } else {
+            DeleteAnnotationDialog(
+                kind = t.info.kind,
+                onDelete = {
+                    viewModel.deleteAnnotation(t.page, t.info.id)
+                    tapped = null
+                },
+                onDismiss = { tapped = null },
+            )
+        }
+    }
+
+    unsavedPrompt?.let { (then, canDiscard) ->
+        UnsavedChangesDialog(
+            onSave = {
+                unsavedPrompt = null
+                save(then)
+            },
+            onDiscard = if (canDiscard) {
+                {
+                    unsavedPrompt = null
+                    then()
+                }
+            } else null,
+            onDismiss = { unsavedPrompt = null },
+        )
+    }
+
+    if (annotate.saving) SavingDialog()
+}
+
+private fun copyToClipboard(context: android.content.Context, text: String) {
+    val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+    clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("Text from PDF", text))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

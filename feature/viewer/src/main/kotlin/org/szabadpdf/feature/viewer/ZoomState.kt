@@ -34,6 +34,12 @@ class ZoomState {
     var viewport by mutableStateOf(IntSize.Zero)
         internal set
 
+    /** Set while a page gesture (drawing, selecting) owns one-finger movement: no sideways panning. */
+    internal var panLocked = false
+
+    /** Set while a stylus draws, so a resting palm doesn't start a pinch. */
+    internal var stylusDrawing = false
+
     val isZoomed: Boolean get() = scale > 1.01f
 
     /** Zooms by [factor] keeping the screen point [focus] fixed. */

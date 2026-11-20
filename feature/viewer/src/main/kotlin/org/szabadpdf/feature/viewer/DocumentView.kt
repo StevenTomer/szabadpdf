@@ -9,7 +9,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +26,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,6 +38,11 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -42,6 +50,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
 import androidx.compose.ui.layout.ContentScale
@@ -49,21 +60,56 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.PageSize
+import org.szabadpdf.core.pdf.PdfPoint
+import org.szabadpdf.core.pdf.TextSelection
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** A sharp, screen-resolution render of the visible part of one page, in page-item pixels. */
-private class DetailTile(val left: Float, val top: Float, val width: Float, val height: Float, val bitmap: Bitmap)
+private class DetailTile(
+    val left: Float, val top: Float, val width: Float, val height: Float, val bitmap: Bitmap, val version: Long,
+)
+
+/** What happens on a page, in page points. Interpretation (which tool, what to select) is the caller's. */
+internal interface PageActions {
+    fun onTap(page: Int, point: PdfPoint)
+    fun onLongPress(page: Int, point: PdfPoint)
+    /** The finger moved after a long press. */
+    fun onLongPressDrag(page: Int, point: PdfPoint)
+    fun onSelectionHandles(page: Int, start: PdfPoint, end: PdfPoint)
+    fun onStroke(page: Int, points: List<PdfPoint>)
+    fun onErase(page: Int, points: List<PdfPoint>, radius: Float, gesture: Int)
+    fun onTextHighlight(page: Int, start: PdfPoint, end: PdfPoint, finished: Boolean)
+    fun onTextHighlightCancelled()
+    fun onStylusSeen()
+}
+
+/** Everything about annotating that the page list draws or reacts to. */
+internal class AnnotationLayer(
+    val tool: Tool?,
+    val inkStyle: InkStyle?,
+    val fingerDraws: Boolean,
+    val pending: Map<Int, List<PendingStroke>>,
+    val selection: TextSelection?,
+    val versions: PageVersions,
+)
 
 internal val PageGap = 8.dp
 private val HighlightColor = Color(0x66FFD54F)
 private val CurrentHighlightColor = Color(0x88FF7043)
+private val SelectionColor = Color(0x553D8BFD)
+private val HandleColor = Color(0xFF3D8BFD)
+private val HandleRadius = 7.dp
+private val EraserRadius = 12.dp
+private var gestureCounter = 0
 
 /**
  * Continuous vertical list of pages with pinch/double-tap zoom.
@@ -81,7 +127,8 @@ internal fun DocumentView(
     contentPadding: PaddingValues,
     searchHits: List<SearchHit>,
     currentHit: SearchHit?,
-    onTap: (page: Int, xPt: Float, yPt: Float) -> Unit,
+    layer: AnnotationLayer,
+    actions: PageActions,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -111,7 +158,7 @@ internal fun DocumentView(
                     awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                     do {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
-                        if (event.changes.count { it.pressed } >= 2) {
+                        if (event.changes.count { it.pressed } >= 2 && !zoom.stylusDrawing) {
                             zoom.gestureActive = true
                             zoom.zoomBy(event.calculateZoom(), event.calculateCentroid(useCurrent = true))
                             val leftover = zoom.panBy(event.calculatePan())
@@ -133,7 +180,7 @@ internal fun DocumentView(
                     do {
                         val event = awaitPointerEvent(PointerEventPass.Final)
                         val pressed = event.changes.filter { it.pressed }
-                        if (pressed.size == 1 && !zoom.gestureActive) {
+                        if (pressed.size == 1 && !zoom.gestureActive && !zoom.panLocked) {
                             val delta = pressed[0].positionChangeIgnoreConsumed()
                             travelled += delta
                             if (!dragging && travelled.getDistance() > viewConfiguration.touchSlop) dragging = true
@@ -170,13 +217,13 @@ internal fun DocumentView(
                     size = size,
                     widthPx = itemWidthPx,
                     source = source,
+                    version = layer.versions.of(index),
                     tile = tiles[index],
                     hits = hitsByPage[index].orEmpty(),
                     currentHit = currentHit?.takeIf { it.page == index },
-                    onTap = { local ->
-                        val ptPerPx = size.width / itemWidthPx
-                        onTap(index, local.x * ptPerPx, local.y * ptPerPx)
-                    },
+                    layer = layer,
+                    actions = actions,
+                    zoom = zoom,
                     onDoubleTap = { local ->
                         val info = listState.layoutInfo
                         val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return@PageItem
@@ -194,9 +241,11 @@ internal fun DocumentView(
     }
 
     // Sharp tiles for the visible area, once zooming and scrolling have settled.
+    val versions by rememberUpdatedState(layer.versions)
     LaunchedEffect(listState, zoom, source) {
         snapshotFlow {
             listOf(
+                versions,
                 zoom.scale, zoom.offsetX, zoom.offsetY, zoom.gestureActive, zoom.viewport,
                 listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.isScrollInProgress,
             )
@@ -208,13 +257,16 @@ internal fun DocumentView(
             if (zoom.gestureActive || listState.isScrollInProgress) return@collectLatest
             delay(80)
             val fresh = mutableMapOf<Int, DetailTile>()
+            val drawnVersions = versions
             visibleRegions(listState, zoom).forEach { region ->
                 val bitmap = source.renderRegion(
                     region.page, region.fullWidth, region.fullHeight,
                     region.x, region.y, region.width, region.height,
                 ) ?: return@forEach
                 val s = zoom.scale
-                fresh[region.page] = DetailTile(region.x / s, region.y / s, region.width / s, region.height / s, bitmap)
+                fresh[region.page] = DetailTile(
+                    region.x / s, region.y / s, region.width / s, region.height / s, bitmap, drawnVersions.of(region.page),
+                )
                 tiles = tiles + (region.page to fresh.getValue(region.page))
             }
             tiles = fresh
@@ -262,31 +314,179 @@ private fun PageItem(
     size: PageSize,
     widthPx: Int,
     source: PageSource,
+    version: Long,
     tile: DetailTile?,
     hits: List<SearchHit>,
     currentHit: SearchHit?,
-    onTap: (Offset) -> Unit,
+    layer: AnnotationLayer,
+    actions: PageActions,
+    zoom: ZoomState,
     onDoubleTap: (Offset) -> Unit,
 ) {
-    var bitmap by remember(index, widthPx) { mutableStateOf(source.cached(index, widthPx)) }
-    LaunchedEffect(index, widthPx) {
-        if (bitmap == null) bitmap = source.render(index, widthPx)
+    // After an edit the old picture stays up until the new one is ready.
+    var bitmap by remember(index, widthPx) { mutableStateOf(source.cached(index, widthPx, version)) }
+    LaunchedEffect(index, widthPx, version) {
+        val fresh = source.cached(index, widthPx, version) ?: source.render(index, widthPx, version)
+        if (fresh != null) bitmap = fresh
     }
     val density = LocalDensity.current
+    val ptPerPx = size.width / widthPx
+    fun Offset.toPt() = PdfPoint(x * ptPerPx, y * ptPerPx)
+
+    val currentLayer by rememberUpdatedState(layer)
+    val currentActions by rememberUpdatedState(actions)
+    val currentDoubleTap by rememberUpdatedState(onDoubleTap)
+    val liveStroke = remember { mutableStateListOf<Offset>() }
+    var eraserAt by remember { mutableStateOf<Offset?>(null) }
+    val selection = layer.selection?.takeIf { it.page == index }
 
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(size.width / size.height)
             .background(Color.White)
+            // Drawing tools. Runs before the list, so a drawing finger doesn't also scroll.
+            // Settings are read per stroke, not used as keys: changing them mustn't cut a stroke short.
             .pointerInput(index) {
-                detectTapGestures(onTap = onTap, onDoubleTap = onDoubleTap)
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    val tool = currentLayer.tool
+                    if (tool == null || !tool.draws) return@awaitEachGesture
+                    val stylus = down.type == PointerType.Stylus || down.type == PointerType.Eraser
+                    if ((!stylus && !currentLayer.fingerDraws) || down.isConsumed) return@awaitEachGesture
+                    if (stylus) currentActions.onStylusSeen()
+                    val erasing = tool == Tool.ERASER || down.type == PointerType.Eraser
+                    val eraserRadius = EraserRadius.toPx() / zoom.scale
+                    val gesture = ++gestureCounter
+                    down.consume()
+                    zoom.panLocked = true
+                    zoom.stylusDrawing = stylus
+                    val path = mutableListOf(down.position)
+                    var sent = 0
+                    fun flushEraser() {
+                        if (path.size - sent < 1) return
+                        val from = (sent - 1).coerceAtLeast(0)
+                        currentActions.onErase(index, path.subList(from, path.size).map { it.toPt() }, eraserRadius * ptPerPx, gesture)
+                        sent = path.size
+                    }
+                    liveStroke.clear()
+                    if (erasing) eraserAt = down.position else if (tool != Tool.TEXT_HIGHLIGHT) liveStroke += down.position
+                    var cancelled = false
+                    try {
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (!stylus && event.changes.count { it.pressed } > 1) {
+                                cancelled = true
+                                break
+                            }
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            val points = change.historical.map { it.position } + change.position
+                            // With a pen, the palm resting on the screen shouldn't scroll either.
+                            if (stylus) event.changes.forEach { it.consume() } else change.consume()
+                            path += points
+                            when {
+                                erasing -> {
+                                    eraserAt = change.position
+                                    if (path.size - sent >= 4) flushEraser()
+                                }
+                                tool == Tool.TEXT_HIGHLIGHT ->
+                                    currentActions.onTextHighlight(index, path.first().toPt(), change.position.toPt(), false)
+                                else -> liveStroke += points
+                            }
+                            if (!change.pressed) break
+                        }
+                    } catch (e: CancellationException) {
+                        liveStroke.clear()
+                        throw e
+                    } finally {
+                        zoom.panLocked = false
+                        zoom.stylusDrawing = false
+                        eraserAt = null
+                    }
+                    when {
+                        erasing -> if (!cancelled) flushEraser()
+                        tool == Tool.TEXT_HIGHLIGHT ->
+                            if (cancelled) currentActions.onTextHighlightCancelled()
+                            else currentActions.onTextHighlight(index, path.first().toPt(), path.last().toPt(), true)
+                        !cancelled -> currentActions.onStroke(index, path.map { it.toPt() })
+                    }
+                    liveStroke.clear()
+                }
+            }
+            // Taps, double taps, long-press text selection and dragging selection handles.
+            .pointerInput(index) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val handleReach = HandleRadius.toPx() * 2.5f / zoom.scale
+                    val sel = currentLayer.selection?.takeIf { it.page == index }
+                    val handle = sel?.let { handlePositions(it, 1f / ptPerPx, HandleRadius.toPx() / zoom.scale) }
+                        ?.let { (start, end) ->
+                            when {
+                                (down.position - start).getDistance() < handleReach -> true
+                                (down.position - end).getDistance() < handleReach -> false
+                                else -> null
+                            }
+                        }
+                    if (sel != null && handle != null) {
+                        // Move whichever end was grabbed, keeping the finger's offset from it.
+                        val anchor = if (handle) sel.start else sel.end
+                        val grab = Offset(anchor.x / ptPerPx, anchor.y / ptPerPx) - down.position
+                        down.consume()
+                        zoom.panLocked = true
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) break
+                                if (change.positionChanged()) {
+                                    val p = (change.position + grab).toPt()
+                                    if (handle) currentActions.onSelectionHandles(index, p, sel.end)
+                                    else currentActions.onSelectionHandles(index, sel.start, p)
+                                }
+                                change.consume()
+                            }
+                        } finally {
+                            zoom.panLocked = false
+                        }
+                        return@awaitEachGesture
+                    }
+
+                    val longPress = awaitLongPressOrCancellation(down.id)
+                    if (longPress != null) {
+                        currentActions.onLongPress(index, longPress.position.toPt())
+                        zoom.panLocked = true
+                        try {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!change.pressed) {
+                                    change.consume()
+                                    break
+                                }
+                                if (change.positionChanged()) currentActions.onLongPressDrag(index, change.position.toPt())
+                                change.consume()
+                            }
+                        } finally {
+                            zoom.panLocked = false
+                        }
+                        return@awaitEachGesture
+                    }
+
+                    val up = currentEvent.changes.firstOrNull { it.id == down.id }
+                    if (up == null || !up.changedToUp() || up.isConsumed) return@awaitEachGesture
+                    val second = withTimeoutOrNull(viewConfiguration.doubleTapTimeoutMillis) { awaitFirstDown() }
+                    if (second == null) {
+                        currentActions.onTap(index, up.position.toPt())
+                    } else if (waitForUpOrCancellation() != null) {
+                        currentDoubleTap(second.position)
+                    }
+                }
             },
     ) {
         bitmap?.let {
             Image(it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
         }
-        tile?.let { t ->
+        tile?.takeIf { it.version == version }?.let { t ->
             with(density) {
                 Image(
                     t.bitmap.asImageBitmap(),
@@ -298,16 +498,56 @@ private fun PageItem(
                 )
             }
         }
-        if (hits.isNotEmpty()) {
-            Canvas(Modifier.fillMaxSize()) {
-                val k = this.size.width / size.width
-                for (hit in hits) {
-                    val color = if (hit == currentHit) CurrentHighlightColor else HighlightColor
-                    for (r in hit.rects) {
-                        drawRect(color, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
-                    }
+        val pending = layer.pending[index].orEmpty()
+        Canvas(Modifier.fillMaxSize()) {
+            val k = this.size.width / size.width // pixels per point
+            for (hit in hits) {
+                val color = if (hit == currentHit) CurrentHighlightColor else HighlightColor
+                for (r in hit.rects) {
+                    drawRect(color, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
                 }
+            }
+            for (stroke in pending) {
+                drawInk(stroke.points.map { Offset(it.x * k, it.y * k) }, stroke.style, k)
+            }
+            val style = layer.inkStyle
+            if (style != null && liveStroke.isNotEmpty()) drawInk(liveStroke, style, k)
+            eraserAt?.let {
+                val r = EraserRadius.toPx() / zoom.scale
+                drawCircle(Color(0x33000000), r, it)
+                drawCircle(Color(0x99000000), r, it, style = Stroke(1.dp.toPx() / zoom.scale))
+            }
+            if (selection != null) {
+                for (r in selection.rects) {
+                    drawRect(SelectionColor, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
+                }
+                val radius = HandleRadius.toPx() / zoom.scale
+                val (start, end) = handlePositions(selection, k, radius)
+                drawCircle(HandleColor, radius, start)
+                drawCircle(HandleColor, radius, end)
             }
         }
     }
+}
+
+/** Where the selection's two drag handles sit: just below its first and last character. */
+private fun handlePositions(selection: TextSelection, pxPerPt: Float, radius: Float): Pair<Offset, Offset> {
+    val first = selection.rects.first()
+    val last = selection.rects.last()
+    return Offset(first.left * pxPerPt, first.bottom * pxPerPt + radius) to
+        Offset(last.right * pxPerPt, last.bottom * pxPerPt + radius)
+}
+
+private fun DrawScope.drawInk(points: List<Offset>, style: InkStyle, pxPerPt: Float) {
+    val color = Color(0xFF000000.toInt() or style.color).copy(alpha = style.opacity)
+    val width = style.width * pxPerPt
+    if (points.size == 1) {
+        drawCircle(color, width / 2f, points[0])
+        return
+    }
+    val path = Path().apply {
+        moveTo(points[0].x, points[0].y)
+        for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
+    }
+    drawPath(path, color, style = Stroke(width, cap = StrokeCap.Round, join = StrokeJoin.Round))
 }

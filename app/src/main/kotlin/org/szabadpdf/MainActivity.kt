@@ -154,6 +154,7 @@ private fun App(
             onBack = ::closeDocument,
             onPageChanged = { page -> recents.updatePage(current, page) },
             onOrganize = { page -> organizeFrom = page },
+            onSavedAs = { copy -> show(copy) },
         )
     }
 }

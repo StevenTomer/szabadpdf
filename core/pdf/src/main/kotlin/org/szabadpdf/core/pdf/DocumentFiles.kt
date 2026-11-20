@@ -35,6 +35,11 @@ object DocumentFiles {
      * put back if writing fails part-way, so the original is never left half-written.
      */
     suspend fun replace(context: Context, uri: Uri, file: File) = withContext(Dispatchers.IO) {
+        replaceBlocking(context, uri, file)
+    }
+
+    /** [replace] on the calling thread. */
+    fun replaceBlocking(context: Context, uri: Uri, file: File) {
         val resolver = context.contentResolver
         val backup = File(File(context.cacheDir, BACKUP_DIR).apply { mkdirs() }, "backup-${System.nanoTime()}.pdf")
         try {

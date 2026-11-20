@@ -27,3 +27,27 @@ sealed interface PageSpec {
 
     data class Blank(val size: PageSize, override val rotation: Int = 0) : PageSpec
 }
+
+/** A point in PDF points, measured from the page's top-left corner. */
+data class PdfPoint(val x: Float, val y: Float)
+
+/** How ink is drawn: [color] is 0xRRGGBB, [width] in points. */
+data class InkStyle(val color: Int, val width: Float, val opacity: Float = 1f)
+
+enum class MarkupKind { HIGHLIGHT, UNDERLINE, STRIKEOUT }
+
+/** Selected text on one page, between [start] and [end] in reading order. */
+data class TextSelection(
+    val page: Int,
+    val start: PdfPoint,
+    val end: PdfPoint,
+    val rects: List<PdfRect>,
+    val text: String,
+)
+
+enum class AnnotationKind { NOTE, HIGHLIGHT, UNDERLINE, STRIKEOUT, INK, OTHER }
+
+/** An annotation on a page. [id] is its PDF object number, stable while the document is open. */
+data class AnnotationInfo(val id: Int, val kind: AnnotationKind, val bounds: PdfRect, val contents: String)
+
+data class EditState(val canUndo: Boolean = false, val canRedo: Boolean = false)

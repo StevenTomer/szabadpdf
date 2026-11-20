@@ -12,6 +12,11 @@ import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.Link
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Outline
+import com.artifex.mupdf.fitz.PDFAnnotation
+import com.artifex.mupdf.fitz.PDFPage
+import com.artifex.mupdf.fitz.Point
+import com.artifex.mupdf.fitz.Quad
+import com.artifex.mupdf.fitz.StructuredText
 import com.artifex.mupdf.fitz.PDFDocument
 import com.artifex.mupdf.fitz.PDFGraftMap
 import com.artifex.mupdf.fitz.Rect
@@ -195,14 +200,173 @@ class PdfDocument private constructor(
             runCatching { loadLayout() }
         }
 
-        val check = Document.openDocument(target.path)
+        verifySaved(target, pages.size)
+    }
+
+    // --- text selection ---------------------------------------------------------------------
+
+    /** Selects the word at [point], or returns null if there's no text there. */
+    suspend fun selectWord(index: Int, point: PdfPoint): TextSelection? = onEngine {
+        val p = toPage(index, point)
+        val st = text(index)
+        // Snapping finds the nearest word even from blank paper, so first check there's a line here.
+        val onText = st.blocks.orEmpty().any { block ->
+            block.lines.orEmpty().any { line -> line.bbox.let { p.x >= it.x0 && p.x <= it.x1 && p.y >= it.y0 && p.y <= it.y1 } }
+        }
+        if (!onText) return@onEngine null
+        val quad = st.snapSelection(Point(p), Point(p), StructuredText.SELECT_WORDS)
+        val r = quad.toRect()
+        if (r.isEmpty || r.x1 - r.x0 < 0.1f) return@onEngine null
+        val midLeft = (quad.ul_y + quad.ll_y) / 2f
+        val midRight = (quad.ur_y + quad.lr_y) / 2f
+        select(index, fromPage(index, quad.ul_x, midLeft), fromPage(index, quad.ur_x, midRight))
+    }
+
+    /** Selects the text running from [start] to [end], or returns null if there's none. */
+    suspend fun selectText(index: Int, start: PdfPoint, end: PdfPoint): TextSelection? =
+        onEngine { select(index, start, end) }
+
+    // --- annotations -----------------------------------------------------------------------
+
+    /** Undo history is kept from the first edit on. Only PDFs can be annotated. */
+    suspend fun editState(): EditState = onEngine { currentEditState() }
+
+    suspend fun annotations(index: Int): List<AnnotationInfo> = onEngine {
+        val page = doc.loadPage(index) as? PDFPage ?: return@onEngine emptyList()
         try {
-            val readable = !check.needsPassword() || password?.let(check::authenticatePassword) == true
-            if (!readable || check.countPages() != pages.size) {
-                throw java.io.IOException("The saved file didn't come out right")
-            }
+            page.annotations.orEmpty().map { it.info(index) }
         } finally {
-            check.destroy()
+            page.destroy()
+        }
+    }
+
+    /** The topmost annotation whose bounds contain [point] (with [slop] points to spare). */
+    suspend fun annotationAt(index: Int, point: PdfPoint, slop: Float = 4f): AnnotationInfo? =
+        annotations(index).lastOrNull {
+            point.x >= it.bounds.left - slop && point.x <= it.bounds.right + slop &&
+                point.y >= it.bounds.top - slop && point.y <= it.bounds.bottom + slop
+        }
+
+    /** Adds one freehand stroke as an ink annotation. */
+    suspend fun addInk(index: Int, points: List<PdfPoint>, style: InkStyle): EditState = onEngine {
+        require(points.isNotEmpty())
+        edit(index, "Ink") { page ->
+            val annot = page.createAnnotation(PDFAnnotation.TYPE_INK)
+            annot.setInkList(arrayOf(points.map { toPage(index, it) }.toTypedArray()))
+            annot.setColor(rgb(style.color))
+            annot.setBorderWidth(style.width)
+            if (style.opacity < 1f) annot.setOpacity(style.opacity)
+            annot.update()
+        }
+    }
+
+    /** Highlights, underlines or strikes out the text from [start] to [end]. */
+    suspend fun addMarkup(index: Int, start: PdfPoint, end: PdfPoint, kind: MarkupKind, color: Int): EditState =
+        onEngine {
+            val quads = text(index).highlight(toPage(index, start), toPage(index, end)).orEmpty()
+            if (quads.isEmpty()) return@onEngine currentEditState()
+            edit(index, kind.name) { page ->
+                val type = when (kind) {
+                    MarkupKind.HIGHLIGHT -> PDFAnnotation.TYPE_HIGHLIGHT
+                    MarkupKind.UNDERLINE -> PDFAnnotation.TYPE_UNDERLINE
+                    MarkupKind.STRIKEOUT -> PDFAnnotation.TYPE_STRIKE_OUT
+                }
+                val annot = page.createAnnotation(type)
+                annot.setQuadPoints(quads)
+                annot.setColor(rgb(color))
+                annot.update()
+            }
+        }
+
+    /** Adds a sticky note with its icon's top-left corner at [point]. */
+    suspend fun addNote(index: Int, point: PdfPoint, text: String): EditState = onEngine {
+        edit(index, "Note") { page ->
+            val p = toPage(index, point)
+            val annot = page.createAnnotation(PDFAnnotation.TYPE_TEXT)
+            annot.setRect(Rect(p.x, p.y, p.x + NOTE_SIZE, p.y + NOTE_SIZE))
+            annot.setIcon("Note")
+            annot.setColor(rgb(NOTE_COLOR))
+            annot.setContents(text)
+            annot.update()
+        }
+    }
+
+    suspend fun setContents(index: Int, id: Int, text: String): EditState = onEngine {
+        edit(index, "Edit note") { page ->
+            find(page, id)?.let {
+                it.setContents(text)
+                it.update()
+            }
+        }
+    }
+
+    suspend fun deleteAnnotation(index: Int, id: Int): EditState = onEngine {
+        edit(index, "Delete") { page -> find(page, id)?.let(page::deleteAnnotation) }
+    }
+
+    /**
+     * Deletes ink strokes passing within [radius] points of the eraser path [points]. Calls
+     * with the same [gesture] are undone together. Returns null if nothing was erased.
+     */
+    suspend fun erase(index: Int, points: List<PdfPoint>, radius: Float, gesture: Int): EditState? = onEngine {
+        val page = doc.loadPage(index) as? PDFPage ?: return@onEngine null
+        val hits = try {
+            val eraser = points.map { toPage(index, it) }
+            page.annotations.orEmpty()
+                .filter { it.type == PDFAnnotation.TYPE_INK && touches(it, eraser, radius) }
+                .map { it.`object`.asIndirect() }
+        } finally {
+            page.destroy()
+        }
+        if (hits.isEmpty()) return@onEngine null
+        edit(index, "Erase", group = "Erase#$gesture") { p ->
+            hits.forEach { id -> find(p, id)?.let(p::deleteAnnotation) }
+        }
+    }
+
+    /** Undoes the last edit (an eraser gesture counts as one). */
+    suspend fun undo(): EditState = onEngine {
+        val pdf = doc as? PDFDocument ?: return@onEngine EditState()
+        if (journal && pdf.canUndo()) {
+            val label = pdf.undoRedoStep(pdf.undoRedoPosition() - 1)
+            do pdf.undo() while (pdf.canUndo() && pdf.undoRedoStep(pdf.undoRedoPosition() - 1) == label)
+            invalidateAll()
+        }
+        currentEditState()
+    }
+
+    suspend fun redo(): EditState = onEngine {
+        val pdf = doc as? PDFDocument ?: return@onEngine EditState()
+        if (journal && pdf.canRedo()) {
+            val label = pdf.undoRedoStep(pdf.undoRedoPosition())
+            do pdf.redo() while (pdf.canRedo() && pdf.undoRedoStep(pdf.undoRedoPosition()) == label)
+            invalidateAll()
+        }
+        currentEditState()
+    }
+
+    /**
+     * Writes the document, edits included, over [uri] (via a checked temporary file and a
+     * backup, see [DocumentFiles.replace]). Changes are appended to the original when the file
+     * allows it, which is quick and keeps existing digital signatures valid. Afterwards this
+     * instance must be closed and the file reopened: its source has been replaced.
+     */
+    suspend fun saveTo(context: Context, uri: Uri) = onEngine {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be saved")
+        val dir = File(context.cacheDir, "saving").apply { mkdirs() }
+        val file = File.createTempFile("save", ".pdf", dir)
+        try {
+            val appended = pdf.canBeSavedIncrementally() && runCatching {
+                pdf.save(file.path, "incremental")
+                verifySaved(file, bounds.size)
+            }.isSuccess
+            if (!appended) {
+                pdf.save(file.path, "garbage=compact,compress")
+                verifySaved(file, bounds.size)
+            }
+            DocumentFiles.replaceBlocking(context, uri, file)
+        } finally {
+            file.delete()
         }
     }
 
@@ -212,12 +376,165 @@ class PdfDocument private constructor(
         // Queued behind any work already submitted, so nothing is freed while in use.
         PdfEngine.executor.execute {
             displayLists.evictAll()
+            textPages.evictAll()
             doc.destroy()
             source.close()
         }
     }
 
     // --- engine-thread helpers -------------------------------------------------------------
+
+    private var journal = false
+    private var operations = 0
+
+    /** Extracted text of recently used pages, for selection. */
+    private val textPages = object : LruCache<Int, StructuredText>(TEXT_CACHE_SIZE) {
+        override fun entryRemoved(evicted: Boolean, key: Int, oldValue: StructuredText, newValue: StructuredText?) {
+            oldValue.destroy()
+        }
+    }
+
+    private fun text(index: Int): StructuredText =
+        textPages.get(index) ?: run {
+            val page = doc.loadPage(index)
+            try {
+                page.toStructuredText().also { textPages.put(index, it) }
+            } finally {
+                page.destroy()
+            }
+        }
+
+    private fun select(index: Int, start: PdfPoint, end: PdfPoint): TextSelection? {
+        val st = text(index)
+        val a = toPage(index, start)
+        val b = toPage(index, end)
+        val quads = st.highlight(a, b).orEmpty()
+        if (quads.isEmpty()) return null
+        val origin = bounds[index]
+        val rects = quads.map { q ->
+            val r = q.toRect()
+            PdfRect(r.x0 - origin.x0, r.y0 - origin.y0, r.x1 - origin.x0, r.y1 - origin.y0)
+        }
+        return TextSelection(index, start, end, rects, st.copy(a, b).orEmpty())
+    }
+
+    private fun toPage(index: Int, p: PdfPoint): Point = bounds[index].let { Point(p.x + it.x0, p.y + it.y0) }
+
+    private fun fromPage(index: Int, x: Float, y: Float): PdfPoint = bounds[index].let { PdfPoint(x - it.x0, y - it.y0) }
+
+    /** Runs one undoable change to page [index] and refreshes what's cached for it. */
+    private fun edit(index: Int, label: String, group: String? = null, block: (PDFPage) -> Unit): EditState {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be annotated")
+        if (!journal) {
+            pdf.enableJournal()
+            journal = true
+        }
+        val page = doc.loadPage(index) as PDFPage
+        pdf.beginOperation(group ?: "$label#${++operations}")
+        try {
+            block(page)
+            page.update()
+            pdf.endOperation()
+        } catch (e: Exception) {
+            pdf.abandonOperation()
+            throw e
+        } finally {
+            page.destroy()
+            displayLists.remove(index)
+            textPages.remove(index)
+        }
+        return currentEditState()
+    }
+
+    private fun currentEditState(): EditState {
+        val pdf = doc as? PDFDocument
+        if (pdf == null || !journal) return EditState()
+        return EditState(canUndo = pdf.canUndo(), canRedo = pdf.canRedo())
+    }
+
+    private fun invalidateAll() {
+        displayLists.evictAll()
+        textPages.evictAll()
+    }
+
+    private fun find(page: PDFPage, id: Int): PDFAnnotation? =
+        page.annotations.orEmpty().firstOrNull { it.`object`.asIndirect() == id }
+
+    private fun PDFAnnotation.info(index: Int): AnnotationInfo {
+        val kind = when (type) {
+            PDFAnnotation.TYPE_TEXT -> AnnotationKind.NOTE
+            PDFAnnotation.TYPE_HIGHLIGHT -> AnnotationKind.HIGHLIGHT
+            PDFAnnotation.TYPE_UNDERLINE -> AnnotationKind.UNDERLINE
+            PDFAnnotation.TYPE_STRIKE_OUT -> AnnotationKind.STRIKEOUT
+            PDFAnnotation.TYPE_INK -> AnnotationKind.INK
+            else -> AnnotationKind.OTHER
+        }
+        val b = bounds
+        val o = this@PdfDocument.bounds[index]
+        return AnnotationInfo(
+            id = `object`.asIndirect(),
+            kind = kind,
+            bounds = PdfRect(b.x0 - o.x0, b.y0 - o.y0, b.x1 - o.x0, b.y1 - o.y0),
+            contents = runCatching { contents }.getOrNull().orEmpty(),
+        )
+    }
+
+    /** Whether any ink stroke of [annot] passes within reach of the eraser path (a polyline). */
+    private fun touches(annot: PDFAnnotation, eraser: List<Point>, radius: Float): Boolean {
+        val reach = radius + annot.borderWidth / 2f
+        val box = annot.bounds
+        if (eraser.none { it.x >= box.x0 - reach && it.x <= box.x1 + reach && it.y >= box.y0 - reach && it.y <= box.y1 + reach }) {
+            return false
+        }
+        for (stroke in annot.inkList.orEmpty()) {
+            for (i in stroke.indices) {
+                val a = stroke[i]
+                val b = stroke[minOf(i + 1, stroke.size - 1)]
+                for (j in eraser.indices) {
+                    val c = eraser[j]
+                    val d = eraser[minOf(j + 1, eraser.size - 1)]
+                    if (segmentDistance(a, b, c, d) <= reach) return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun segmentDistance(a: Point, b: Point, c: Point, d: Point): Float {
+        fun cross(o: Point, p: Point, q: Point) = (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x)
+        val d1 = cross(c, d, a)
+        val d2 = cross(c, d, b)
+        val d3 = cross(a, b, c)
+        val d4 = cross(a, b, d)
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0f
+        return minOf(
+            minOf(distanceToSegment(a, c, d), distanceToSegment(b, c, d)),
+            minOf(distanceToSegment(c, a, b), distanceToSegment(d, a, b)),
+        )
+    }
+
+    private fun distanceToSegment(p: Point, a: Point, b: Point): Float {
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val lengthSq = dx * dx + dy * dy
+        val t = if (lengthSq == 0f) 0f else (((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq).coerceIn(0f, 1f)
+        val x = a.x + t * dx - p.x
+        val y = a.y + t * dy - p.y
+        return kotlin.math.sqrt(x * x + y * y)
+    }
+
+    /** Reopens a written file to make sure it's readable and has every page. */
+    private fun verifySaved(file: File, expectedPages: Int) {
+        val check = Document.openDocument(file.path)
+        try {
+            val readable = !check.needsPassword() || password?.let(check::authenticatePassword) == true
+            if (!readable || check.countPages() != expectedPages) {
+                throw java.io.IOException("The saved file didn't come out right")
+            }
+        } finally {
+            check.destroy()
+        }
+    }
 
     private suspend fun <T> onEngine(block: () -> T): T = withContext(PdfEngine.dispatcher) {
         check(!closed) { "Document is closed" }
@@ -271,6 +588,15 @@ class PdfDocument private constructor(
 
     companion object {
         private const val DISPLAY_LIST_CACHE_SIZE = 12
+        private const val TEXT_CACHE_SIZE = 4
+        private const val NOTE_SIZE = 24f
+        private const val NOTE_COLOR = 0xFFD54F
+
+        private fun rgb(color: Int) = floatArrayOf(
+            ((color shr 16) and 0xFF) / 255f,
+            ((color shr 8) and 0xFF) / 255f,
+            (color and 0xFF) / 255f,
+        )
         private const val COPY_DIR = "opened"
 
         /**
