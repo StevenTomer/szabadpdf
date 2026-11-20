@@ -12,6 +12,8 @@ import com.artifex.mupdf.fitz.Document
 import com.artifex.mupdf.fitz.Link
 import com.artifex.mupdf.fitz.Matrix
 import com.artifex.mupdf.fitz.Outline
+import com.artifex.mupdf.fitz.PDFDocument
+import com.artifex.mupdf.fitz.PDFGraftMap
 import com.artifex.mupdf.fitz.Rect
 import com.artifex.mupdf.fitz.android.AndroidDrawDevice
 import kotlinx.coroutines.withContext
@@ -41,6 +43,9 @@ class PdfDocument private constructor(
     var isLocked: Boolean = true
         private set
 
+    /** Kept to check files saved from an encrypted document, which stay encrypted. */
+    private var password: String? = null
+
     val pageCount: Int get() = bounds.size
 
     val pageSizes: List<PageSize>
@@ -56,7 +61,10 @@ class PdfDocument private constructor(
     /** Returns false if the password is wrong. */
     suspend fun authenticate(password: String): Boolean = onEngine {
         val ok = doc.authenticatePassword(password)
-        if (ok) loadLayout()
+        if (ok) {
+            this.password = password
+            loadLayout()
+        }
         ok
     }
 
@@ -126,6 +134,76 @@ class PdfDocument private constructor(
         }
         doc.loadOutline()?.let { walk(it, 0) }
         result
+    }
+
+    /** Whether this is a PDF (rather than another format MuPDF reads), so its pages can be edited. */
+    val isEditable: Boolean get() = doc is PDFDocument
+
+    /**
+     * Writes a copy of this document to [target] with its pages replaced by [pages], in that
+     * order: reordered, rotated, dropped, blank or taken from other open documents. Everything
+     * else (metadata, bookmarks to pages that remain, forms) is kept.
+     *
+     * The rebuild happens to this document in memory, so it should be a fresh instance opened
+     * only for saving and closed afterwards; documents named in [PageSpec.Existing.from] are
+     * only read. The written file is reopened and checked before this returns.
+     */
+    suspend fun saveRearranged(pages: List<PageSpec>, target: File) = onEngine {
+        require(pages.isNotEmpty()) { "A document needs at least one page" }
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be edited")
+        val graftMaps = HashMap<PdfDocument, PDFGraftMap>()
+        try {
+            // New pages go at the end first; then one rearrange puts everything in place.
+            var next = pdf.countPages()
+            val order = IntArray(pages.size) { i ->
+                when (val spec = pages[i]) {
+                    is PageSpec.Existing -> {
+                        val from = spec.from
+                        if (from == null || from === this) {
+                            spec.index
+                        } else {
+                            val src = from.doc as? PDFDocument
+                                ?: throw UnsupportedOperationException("Only pages from PDF files can be inserted")
+                            check(!from.closed) { "Source document is closed" }
+                            graftMaps.getOrPut(from) { pdf.newPDFGraftMap() }.graftPage(-1, src, spec.index)
+                            next++
+                        }
+                    }
+                    is PageSpec.Blank -> {
+                        val page = pdf.addPage(Rect(0f, 0f, spec.size.width, spec.size.height), 0, pdf.newDictionary(), "")
+                        pdf.insertPage(-1, page)
+                        next++
+                    }
+                }
+            }
+            require(order.distinct().size == order.size) { "A page can't appear twice" }
+            pdf.rearrangePages(order)
+
+            pages.forEachIndexed { i, spec ->
+                if (spec.rotation % 360 == 0) return@forEachIndexed
+                val page = pdf.findPage(i)
+                val current = page.getInheritable("Rotate").let { if (it.isNull) 0 else it.asInteger() }
+                page.put("Rotate", Math.floorMod(current + spec.rotation, 360))
+            }
+
+            target.parentFile?.mkdirs()
+            pdf.save(target.path, "garbage=compact,compress")
+        } finally {
+            graftMaps.values.forEach(PDFGraftMap::destroy)
+            // The in-memory document no longer matches what was laid out.
+            displayLists.evictAll()
+            runCatching { loadLayout() }
+        }
+
+        val check = Document.openDocument(target.path)
+        try {
+            val readable = !check.needsPassword() || password?.let(check::authenticatePassword) == true
+            if (!readable || check.countPages() != pages.size) {
+                throw java.io.IOException("The saved file didn't come out right")
+            }
+        } finally {
+            check.destroy()
+        }
     }
 
     override fun close() {

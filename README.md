@@ -33,14 +33,16 @@ Minimum Android version: 8.0 (API 26).
 
 ```
 app/                  home screen, recent files, file picker, "Open with" handling
-core/pdf/             Kotlin wrapper around MuPDF: opening, rendering, search, links, outline
+core/pdf/             Kotlin wrapper around MuPDF: opening, rendering, search, links, outline,
+                      rebuilding page lists and safely writing files back
                       (all MuPDF calls run on one dedicated thread)
 feature/viewer/       continuous scrolling, zoom, search, table of contents, go to page
+feature/organize/     page grid: drag to reorder, rotate, delete, insert blank pages or other PDFs
 testdata/             source for the test PDF used by core/pdf's instrumented tests
 ```
 
-Planned: `feature/organize/` (page grid: reorder, rotate, delete, insert), `feature/annotate/`
-(annotation tools, undo/redo) and `feature/scan/` (camera to PDF, behind a swappable interface).
+Planned: `feature/annotate/` (annotation tools, undo/redo) and `feature/scan/` (camera to PDF,
+behind a swappable interface).
 
 ## Building
 
@@ -57,7 +59,9 @@ The debug build installs as "org.szabadpdf.debug", alongside any release build.
 ## Roadmap
 
 1. Viewer (done: scrolling, pinch and double-tap zoom with sharp re-rendering, search, table of contents, links, go to page, recent files)
-2. Page organization, with safe saving (write to a temp file, then swap it in)
+2. Page organization (done: drag to reorder, rotate, delete, move to start/end, insert blank pages or
+   pages from another PDF, undo/redo; save in place or as a copy. Saving writes and checks a new file
+   first, and backs up the original so a failed write puts it back)
 3. Annotations
 4. Scanner
 5. Forms, signatures, sync

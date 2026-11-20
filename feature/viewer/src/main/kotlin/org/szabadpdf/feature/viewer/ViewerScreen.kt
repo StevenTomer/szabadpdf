@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
@@ -92,6 +93,7 @@ fun ViewerScreen(
     viewModel: ViewerViewModel,
     onBack: () -> Unit,
     onPageChanged: (page: Int) -> Unit,
+    onOrganize: ((currentPage: Int) -> Unit)? = null,
 ) {
     val state by viewModel.state.collectAsState()
     when (val s = state) {
@@ -101,7 +103,7 @@ fun ViewerScreen(
         is ViewerState.Error -> ErrorScreen(s.message, onBack)
         is ViewerState.NeedsPassword -> PasswordDialog(s.wrongPassword, viewModel::submitPassword, onBack)
         is ViewerState.Ready -> key(s.document.uri) {
-            DocumentScreen(s.document, viewModel, onBack, onPageChanged)
+            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize)
         }
     }
 }
@@ -113,6 +115,7 @@ private fun DocumentScreen(
     viewModel: ViewerViewModel,
     onBack: () -> Unit,
     onPageChanged: (Int) -> Unit,
+    onOrganize: ((Int) -> Unit)?,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -210,6 +213,9 @@ private fun DocumentScreen(
                     actions = {
                         IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
                         IconButton(onClick = { showOutline = true }) { Icon(Icons.AutoMirrored.Filled.List, "Contents") }
+                        if (onOrganize != null) {
+                            IconButton(onClick = { onOrganize(currentPage) }) { Icon(Icons.Filled.GridView, "Organize pages") }
+                        }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),

@@ -63,6 +63,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     val search: StateFlow<SearchState> = _search.asStateFlow()
 
     private var document: PdfDocument? = null
+
+    /** The password that unlocked the open document, if it needed one. */
+    var password: String? = null
+        private set
     private var uri: Uri? = null
     private var fallbackTitle: String = ""
     private var initialPage = 0
@@ -75,9 +79,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         override fun sizeOf(key: Long, value: Bitmap) = value.allocationByteCount
     }
 
-    /** Opens [uri] unless it's already the open document. */
-    fun open(uri: Uri, displayName: String, initialPage: Int) {
-        if (this.uri == uri) return
+    /** Opens [uri] unless it's already the open document (or [reload] is set, e.g. after saving). */
+    fun open(uri: Uri, displayName: String, initialPage: Int, reload: Boolean = false) {
+        if (this.uri == uri && !reload) return
+        val knownPassword = password.takeIf { this.uri == uri }
         close()
         this.uri = uri
         this.fallbackTitle = displayName
@@ -87,6 +92,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             try {
                 val doc = PdfDocument.open(getApplication(), uri)
                 document = doc
+                if (doc.isLocked && knownPassword != null && doc.authenticate(knownPassword)) password = knownPassword
                 if (doc.isLocked) _state.value = ViewerState.NeedsPassword(wrongPassword = false)
                 else showDocument(doc)
             } catch (e: CancellationException) {
@@ -100,8 +106,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     fun submitPassword(password: String) {
         val doc = document ?: return
         viewModelScope.launch {
-            if (doc.authenticate(password)) showDocument(doc)
-            else _state.value = ViewerState.NeedsPassword(wrongPassword = true)
+            if (doc.authenticate(password)) {
+                this@ViewerViewModel.password = password
+                showDocument(doc)
+            } else _state.value = ViewerState.NeedsPassword(wrongPassword = true)
         }
     }
 
@@ -110,6 +118,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         searchJob?.cancel()
         document?.close()
         document = null
+        password = null
         uri = null
         outline = null
         pageCache.evictAll()

@@ -14,16 +14,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import org.szabadpdf.feature.organize.OrganizeScreen
+import org.szabadpdf.feature.organize.OrganizeViewModel
 import org.szabadpdf.feature.viewer.ViewerScreen
 import org.szabadpdf.feature.viewer.ViewerViewModel
 
 class MainActivity : ComponentActivity() {
 
     private val viewer: ViewerViewModel by viewModels()
+    private val organizer: OrganizeViewModel by viewModels()
     private lateinit var recents: RecentFiles
 
     /** A document handed to us by another app, waiting to be shown. */
@@ -40,6 +44,7 @@ class MainActivity : ComponentActivity() {
             SzabadTheme {
                 App(
                     viewer = viewer,
+                    organizer = organizer,
                     recents = recents,
                     incoming = incoming,
                     onIncomingHandled = { incoming = null },
@@ -54,20 +59,27 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun App(
     viewer: ViewerViewModel,
+    organizer: OrganizeViewModel,
     recents: RecentFiles,
     incoming: Uri?,
     onIncomingHandled: () -> Unit,
 ) {
     val context = LocalContext.current
     var openUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    /** Page to start the organize grid at, or -1 when not organizing. */
+    var organizeFrom by rememberSaveable { mutableIntStateOf(-1) }
 
     fun show(uri: Uri) {
+        organizer.discard()
+        organizeFrom = -1
         val entry = recents.recordOpened(uri)
         viewer.open(uri, entry.name, entry.lastPage)
         openUri = uri
     }
 
     fun closeDocument() {
+        organizer.discard()
+        organizeFrom = -1
         viewer.close()
         openUri = null
     }
@@ -75,8 +87,14 @@ private fun App(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             // Keep access across restarts so the file can be reopened from Recent.
+            // Write access too where the provider allows it, so edits can be saved in place.
+            val resolver = context.contentResolver
             runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                resolver.takePersistableUriPermission(
+                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }.recoverCatching {
+                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             show(uri)
         }
@@ -107,12 +125,35 @@ private fun App(
             onOpenRecent = { show(it.uri) },
             onRemoveRecent = { recents.remove(it.uri) },
         )
+    } else if (organizeFrom >= 0) {
+        LaunchedEffect(current) {
+            organizer.start(current, recents.get(current)?.name ?: "Document", viewer.password)
+        }
+        OrganizeScreen(
+            viewModel = organizer,
+            initialPage = organizeFrom,
+            onClose = {
+                organizer.discard()
+                organizeFrom = -1
+            },
+            onSaved = { saved ->
+                organizer.discard()
+                organizeFrom = -1
+                if (saved == current) {
+                    val entry = recents.get(current)
+                    viewer.open(current, entry?.name ?: "Document", entry?.lastPage ?: 0, reload = true)
+                } else {
+                    show(saved)
+                }
+            },
+        )
     } else {
         BackHandler(onBack = ::closeDocument)
         ViewerScreen(
             viewModel = viewer,
             onBack = ::closeDocument,
             onPageChanged = { page -> recents.updatePage(current, page) },
+            onOrganize = { page -> organizeFrom = page },
         )
     }
 }

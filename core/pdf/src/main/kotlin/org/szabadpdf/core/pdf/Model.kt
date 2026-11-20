@@ -14,3 +14,16 @@ sealed interface LinkTarget {
 
 /** One table-of-contents entry, flattened. [pageIndex] is -1 when the entry has no page in this document. */
 data class OutlineEntry(val title: String, val depth: Int, val pageIndex: Int)
+
+/**
+ * One page of a document being rebuilt by [PdfDocument.saveRearranged]. [rotation] is extra
+ * clockwise rotation in degrees on top of the page's own, any multiple of 90 (negative is fine).
+ */
+sealed interface PageSpec {
+    val rotation: Int
+
+    /** Page [index] of [from], or of the document being saved when [from] is null. */
+    data class Existing(val index: Int, val from: PdfDocument? = null, override val rotation: Int = 0) : PageSpec
+
+    data class Blank(val size: PageSize, override val rotation: Int = 0) : PageSpec
+}

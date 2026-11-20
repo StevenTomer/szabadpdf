@@ -19,4 +19,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "szabadpdf"
-include(":app", ":core:pdf", ":feature:viewer")
+include(":app", ":core:pdf", ":feature:viewer", ":feature:organize")
