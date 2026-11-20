@@ -6,16 +6,22 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 
 ## Features
 
-**Planned for the first version**
-- View PDFs: smooth scrolling, zoom, thumbnails, text search and selection
-- Annotate: highlight, underline, strikeout, freehand ink, notes, shapes; undo/redo
-- Organize pages: reorder, rotate, delete, insert
-- Scan: camera to PDF with automatic page detection and cleanup
-- Open and save files anywhere through Android's file picker (local storage, Google Drive, Dropbox, OneDrive)
+- View PDFs page by page or continuously: zoom, search, table of contents, links, page
+  thumbnails, night mode; several documents open in tabs
+- Annotate: pen (pressure-sensitive with a stylus) and highlighter, text boxes, rectangles, ovals,
+  lines and arrows, highlight/underline/strikeout (also across pages), notes; undo/redo
+- Sign with a saved drawn signature; fill in forms (text, checkboxes, radio buttons, lists)
+- Unsaved changes survive the app being closed (kept as a draft and offered back)
+- Password protection: add, change or remove an AES-256 open password
+- Organize pages: reorder, rotate, duplicate, delete, insert; merge PDFs; extract pages or split
+  into several files
+- Reduce file size by recompressing large photos
+- Scan: camera to PDF with automatic page detection and cleanup, into a new or an existing
+  document; English OCR makes scans searchable, and can be run on existing scanned PDFs
+- Share, save as, print; open and save files anywhere through Android's file picker
 
 **Later**
-- Form filling
-- Signatures (drawn signatures first, then cryptographic digital signatures)
+- Cryptographic digital signatures
 - Sync
 
 ## Tech stack
@@ -55,7 +61,8 @@ testdata/             source for the test PDF used by core/pdf's instrumented te
 Requires JDK 21 and the Android SDK (platform 37.2).
 
 ```sh
-./gradlew assembleDebug                         # app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug                         # app/build/outputs/apk/debug/
+./gradlew assembleRelease                       # app/build/outputs/apk/release/ (see below)
 ./gradlew installDebug                          # install on a connected device or emulator
 ./gradlew :core:pdf:connectedDebugAndroidTest :core:scan:connectedDebugAndroidTest
                                                 # engine and scanner tests (need a device or emulator)
@@ -65,6 +72,12 @@ The debug build installs as "org.szabadpdf.debug", alongside any release build. 
 APK per processor type (arm64-v8a, armeabi-v7a, x86_64, x86), since the native libraries (MuPDF,
 OpenCV, LiteRT) are large. The first build downloads the scanner's segmentation model from GitHub
 and checks its SHA-256.
+
+Release builds are shrunk with R8 and signed with a key kept outside the repository: put
+`storeFile`, `storePassword`, `keyAlias` and `keyPassword` in
+`~/.android-keys/szabadpdf-release.properties` (or pass `-Pszabadpdf.signing=<path>`). Without
+it, release APKs come out unsigned. Released builds are signed with the certificate whose SHA-256 is
+`09:CB:F8:95:8D:A7:F6:6C:8D:AD:74:A5:12:5A:F5:1A:DE:21:D0:C0:73:E9:BB:5D:4A:7C:55:3A:9C:A3:06:2A`.
 
 ## Viewing
 
@@ -91,7 +104,10 @@ shows them.
    the scanned pages to an existing document from the viewer's ⋮ menu or the page organizer). Scanned
    pages are searchable: text is recognized with Tesseract (English) and laid invisibly over the
    page image
-5. Forms, signatures, sync
+5. Drafts (autosave), passwords, signatures, forms, extract/split/compress, OCR for existing
+   PDFs, text boxes and shapes, pen pressure, selection across pages, night mode, thumbnails (done,
+   released as 0.6.0)
+6. Sync
 
 ## License
 
