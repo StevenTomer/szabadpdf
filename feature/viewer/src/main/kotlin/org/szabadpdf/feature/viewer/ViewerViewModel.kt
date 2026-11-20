@@ -415,6 +415,26 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
 
     // --- annotating ------------------------------------------------------------------------
 
+    private val _night = MutableStateFlow(prefs.getBoolean(KEY_NIGHT, false))
+
+    /** Pages shown with their colours inverted, for reading in the dark. */
+    val night: StateFlow<Boolean> = _night.asStateFlow()
+
+    private val _thumbnails = MutableStateFlow(prefs.getBoolean(KEY_THUMBNAILS, true))
+
+    /** A strip of page thumbnails along the bottom, with the toolbars. */
+    val thumbnails: StateFlow<Boolean> = _thumbnails.asStateFlow()
+
+    fun setNight(on: Boolean) {
+        _night.value = on
+        prefs.edit().putBoolean(KEY_NIGHT, on).apply()
+    }
+
+    fun setThumbnails(on: Boolean) {
+        _thumbnails.value = on
+        prefs.edit().putBoolean(KEY_THUMBNAILS, on).apply()
+    }
+
     fun setPaged(paged: Boolean) {
         _paged.value = paged
         prefs.edit().putBoolean(KEY_PAGED, paged).apply()
@@ -978,6 +998,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     private companion object {
         const val KEY_STYLUS_SEEN = "stylus_seen"
         const val KEY_PAGED = "paged"
+        const val KEY_NIGHT = "night"
+        const val KEY_THUMBNAILS = "thumbnails"
 
         /** Longest side of the page renders text is read from: about 300 dpi for A4. */
         const val RECOGNIZE_SIDE = 3000f

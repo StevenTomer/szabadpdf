@@ -109,6 +109,8 @@ internal class AnnotationLayer(
     val versions: PageVersions,
     val fields: Map<Int, List<FormField>> = emptyMap(),
     val shape: ShapeKind = ShapeKind.RECTANGLE,
+    /** Inverted page colours. */
+    val night: Boolean = false,
     /** The selection page by page, when it runs over several. */
     val selectionParts: List<TextSelection> = emptyList(),
 )
@@ -117,6 +119,18 @@ internal val PageGap = 8.dp
 private val HighlightColor = Color(0x66FFD54F)
 private val CurrentHighlightColor = Color(0x88FF7043)
 private val SelectionColor = Color(0x553D8BFD)
+
+/** Inverts colours (white paper becomes black, black text white). */
+internal val NightFilter = androidx.compose.ui.graphics.ColorFilter.colorMatrix(
+    androidx.compose.ui.graphics.ColorMatrix(
+        floatArrayOf(
+            -1f, 0f, 0f, 0f, 255f,
+            0f, -1f, 0f, 0f, 255f,
+            0f, 0f, -1f, 0f, 255f,
+            0f, 0f, 0f, 1f, 0f,
+        ),
+    ),
+)
 private val FieldColor = Color(0x223D6BFD)
 private val HandleColor = Color(0xFF3D8BFD)
 private val HandleRadius = 7.dp
@@ -170,7 +184,7 @@ internal fun DocumentView(
     BoxWithConstraints(
         modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .background(if (layer.night) Color(0xFF101010) else MaterialTheme.colorScheme.surfaceContainerHighest)
             .clipToBounds()
             .onSizeChanged { zoom.viewport = it }
             // Two fingers: pinch-zoom and pan. Runs before the list sees the events.
@@ -458,7 +472,7 @@ private fun PageItem(
 
     Box(
         modifier
-            .background(Color.White)
+            .background(if (layer.night) Color.Black else Color.White)
             // Drawing tools. Runs before the list, so a drawing finger doesn't also scroll.
             // Settings are read per stroke, not used as keys: changing them mustn't cut a stroke short.
             .pointerInput(index) {
@@ -608,8 +622,15 @@ private fun PageItem(
                 }
             },
     ) {
+        val colorFilter = if (layer.night) NightFilter else null
         bitmap?.let {
-            Image(it.asImageBitmap(), contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize())
+            Image(
+                it.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.FillBounds,
+                colorFilter = colorFilter,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
         tile?.takeIf { it.version == version }?.let { t ->
             with(density) {
@@ -617,6 +638,7 @@ private fun PageItem(
                     t.bitmap.asImageBitmap(),
                     contentDescription = null,
                     contentScale = ContentScale.FillBounds,
+                    colorFilter = colorFilter,
                     modifier = Modifier
                         .offset { IntOffset(t.left.roundToInt(), t.top.roundToInt()) }
                         .size(t.width.toDp(), t.height.toDp()),

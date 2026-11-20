@@ -7,11 +7,15 @@ import android.print.PageRange
 import android.print.PrintAttributes
 import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.DocumentScanner
@@ -133,6 +139,10 @@ internal fun MoreMenu(
     onOrganize: () -> Unit,
     onScanInto: () -> Unit,
     onPaged: (Boolean) -> Unit,
+    night: Boolean,
+    onNight: (Boolean) -> Unit,
+    thumbnails: Boolean,
+    onThumbnails: (Boolean) -> Unit,
     onShare: () -> Unit,
     onSaveAs: () -> Unit,
     onPrint: () -> Unit,
@@ -170,6 +180,18 @@ internal fun MoreMenu(
                 leadingIcon = { Icon(Icons.Filled.ViewDay, null) },
                 trailingIcon = { Checkbox(checked = !paged, onCheckedChange = null) },
                 onClick = pick { onPaged(!paged) },
+            )
+            DropdownMenuItem(
+                text = { Text("Night mode") },
+                leadingIcon = { Icon(Icons.Filled.DarkMode, null) },
+                trailingIcon = { Checkbox(checked = night, onCheckedChange = null) },
+                onClick = pick { onNight(!night) },
+            )
+            DropdownMenuItem(
+                text = { Text("Page thumbnails") },
+                leadingIcon = { Icon(Icons.Filled.ViewCarousel, null) },
+                trailingIcon = { Checkbox(checked = thumbnails, onCheckedChange = null) },
+                onClick = pick { onThumbnails(!thumbnails) },
             )
             HorizontalDivider()
             DropdownMenuItem(
@@ -247,3 +269,66 @@ internal class PdfPrintAdapter(private val file: File) : PrintDocumentAdapter() 
         }
     }
 }
+
+/** A strip of page thumbnails; tap one to go there. Follows the [current] page. */
+@Composable
+internal fun ThumbnailStrip(
+    pageSizes: List<org.szabadpdf.core.pdf.PageSize>,
+    current: Int,
+    source: PageSource,
+    versions: PageVersions,
+    night: Boolean,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val list = androidx.compose.foundation.lazy.rememberLazyListState(initialFirstVisibleItemIndex = (current - 2).coerceAtLeast(0))
+    androidx.compose.runtime.LaunchedEffect(current) { list.animateScrollToItem((current - 2).coerceAtLeast(0)) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val widthPx = with(density) { ThumbWidth.roundToPx() }
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), modifier = modifier.fillMaxWidth()) {
+        androidx.compose.foundation.lazy.LazyRow(
+            state = list,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            items(pageSizes.size, key = { it }) { page ->
+                val size = pageSizes[page]
+                val version = versions.of(page)
+                val bitmap by androidx.compose.runtime.produceState(source.cached(page, widthPx, version), page, version) {
+                    if (value == null) value = source.render(page, widthPx, version)
+                }
+                val selected = page == current
+                androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier
+                            .size(width = ThumbWidth, height = ThumbWidth * (size.height / size.width).coerceIn(0.5f, 1.6f))
+                            .background(if (night) androidx.compose.ui.graphics.Color.Black else androidx.compose.ui.graphics.Color.White)
+                            .border(
+                                if (selected) 2.dp else 1.dp,
+                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                            )
+                            .clickable(onClickLabel = "Go to page ${page + 1}") { onSelect(page) },
+                    ) {
+                        bitmap?.let {
+                            androidx.compose.foundation.Image(
+                                it.asImageBitmap(),
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                colorFilter = if (night) NightFilter else null,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
+                    Text(
+                        "${page + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal val ThumbWidth = 48.dp

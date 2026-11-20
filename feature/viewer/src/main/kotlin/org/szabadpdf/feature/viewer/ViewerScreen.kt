@@ -156,6 +156,8 @@ private fun DocumentScreen(
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = info.initialPage)
     val pagerState = rememberPagerState(initialPage = info.initialPage) { info.pageSizes.size }
     val paged by viewModel.paged.collectAsState()
+    val night by viewModel.night.collectAsState()
+    val showThumbnails by viewModel.thumbnails.collectAsState()
     val zoom = remember { ZoomState() }
     val search by viewModel.search.collectAsState()
     val annotate by viewModel.annotate.collectAsState()
@@ -474,6 +476,7 @@ private fun DocumentScreen(
                 fields = fields,
                 shape = annotate.shape,
                 selectionParts = selectionParts,
+                night = night,
             ),
             actions = actions,
         )
@@ -551,6 +554,10 @@ private fun DocumentScreen(
                                     else onScanInto?.invoke(currentPage)
                                 },
                                 onPaged = ::setPaged,
+                                night = night,
+                                onNight = viewModel::setNight,
+                                thumbnails = showThumbnails,
+                                onThumbnails = viewModel::setThumbnails,
                                 onShare = { share() },
                                 onSaveAs = { copyPicker.launch(info.name) },
                                 onPrint = { print() },
@@ -566,6 +573,24 @@ private fun DocumentScreen(
                     })
                 }
             }
+        }
+
+        val stripShown = showThumbnails && showChrome && !annotate.active && !searchOpen && selection == null && pageCount > 1
+        AnimatedVisibility(
+            visible = stripShown,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            ThumbnailStrip(
+                pageSizes = info.pageSizes,
+                current = currentPage,
+                source = viewModel,
+                versions = versions,
+                night = night,
+                onSelect = { goTo(it) },
+                modifier = Modifier.navigationBarsPadding(),
+            )
         }
 
         AnimatedVisibility(
@@ -600,7 +625,7 @@ private fun DocumentScreen(
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
                 .padding(16.dp)
-                .padding(bottom = if (annotate.active) 64.dp else 0.dp),
+                .padding(bottom = if (annotate.active) 64.dp else if (stripShown) 92.dp else 0.dp),
         ) {
             Surface(
                 shape = MaterialTheme.shapes.extraLarge,
