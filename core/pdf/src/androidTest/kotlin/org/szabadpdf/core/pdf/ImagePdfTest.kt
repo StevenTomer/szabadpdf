@@ -29,7 +29,7 @@ class ImagePdfTest {
         val portrait = image("p.jpg", 1000, 1400, Bitmap.CompressFormat.JPEG)
         val landscape = image("l.png", 1600, 1000, Bitmap.CompressFormat.PNG)
         val out = File(context.cacheDir, "images.pdf").apply { delete() }
-        ImagePdf.write(listOf(portrait, landscape), out, title = "Scan")
+        ImagePdf.write(context, listOf(portrait, landscape), out, title = "Scan")
 
         val doc = PdfDocument.open(context, Uri.fromFile(out))
         try {
@@ -43,6 +43,36 @@ class ImagePdfTest {
             // JPEG blurs edges a little, so check well inside the black block and the white area.
             assertTrue("top-left is dark", Color.red(bitmap.getPixel(20, 20)) < 40)
             assertTrue("bottom-right is light", Color.red(bitmap.getPixel(450, 650)) > 215)
+        } finally {
+            doc.close()
+        }
+    }
+
+    @Test
+    fun ocrTextIsSearchableWhereTheWordsAre() = runBlocking {
+        // A 1000 x 1400 image; two words on one line, 40 px high, 100 px from the top.
+        val image = image("ocr.jpg", 1000, 1400, Bitmap.CompressFormat.JPEG)
+        val words = listOf(
+            OcrWord("Hello", 100, 100, 260, 140, 40, 140),
+            OcrWord("Wörld", 300, 100, 470, 140, 40, 140),
+        )
+        val out = File(context.cacheDir, "ocr.pdf").apply { delete() }
+        ImagePdf.write(context, listOf(image), out, text = listOf(words))
+
+        val doc = PdfDocument.open(context, Uri.fromFile(out))
+        try {
+            val k = doc.pageSizes[0].width / 1000f // points per image pixel
+            val hits = doc.search(0, "wörld")
+            assertEquals(1, hits.size)
+            val r = hits[0][0]
+            assertEquals(300 * k, r.left, 3f)
+            assertEquals(470 * k, r.right, 3f)
+            assertTrue("hit sits on the word's line: $r", r.bottom in 120 * k..150 * k)
+            // The two words read as one phrase, in order.
+            assertEquals(1, doc.search(0, "hello wörld").size)
+            // And the text is invisible: the page looks like the image alone.
+            // (Under the second word: white, outside the image's black corner block.)
+            assertTrue(Color.red(doc.renderPage(0, 500).getPixel(385 / 2, 120 / 2)) > 200)
         } finally {
             doc.close()
         }

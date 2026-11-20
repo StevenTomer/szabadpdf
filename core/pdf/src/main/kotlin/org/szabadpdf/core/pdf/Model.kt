@@ -51,3 +51,17 @@ enum class AnnotationKind { NOTE, HIGHLIGHT, UNDERLINE, STRIKEOUT, INK, OTHER }
 data class AnnotationInfo(val id: Int, val kind: AnnotationKind, val bounds: PdfRect, val contents: String)
 
 data class EditState(val canUndo: Boolean = false, val canRedo: Boolean = false)
+
+/**
+ * A word read from a page image by OCR, with its box in the image's pixels. [lineHeight] and
+ * [lineBottom] are its text line's, so all words of a line get one size and baseline.
+ */
+data class OcrWord(
+    val text: String,
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+    val lineHeight: Int,
+    val lineBottom: Int,
+)

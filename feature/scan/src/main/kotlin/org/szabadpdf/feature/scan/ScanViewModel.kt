@@ -22,10 +22,12 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.szabadpdf.core.pdf.DocumentFiles
 import org.szabadpdf.core.pdf.ImagePdf
+import org.szabadpdf.core.pdf.OcrWord
 import org.szabadpdf.core.scan.Corners
 import org.szabadpdf.core.scan.DocumentScanner
 import org.szabadpdf.core.scan.QuadStabilizer
 import org.szabadpdf.core.scan.ScanColor
+import org.szabadpdf.core.scan.TextRecognizer
 import java.io.File
 import kotlin.math.max
 
@@ -50,6 +52,8 @@ data class ScanState(
     /** Photos still being turned into pages. */
     val processing: Int = 0,
     val saving: Boolean = false,
+    /** While saving: reading the text of page [first] of [second] (1-based). */
+    val reading: Pair<Int, Int>? = null,
 )
 
 /** The live outline, in fractions of the upright camera frame of [frameWidth] × [frameHeight]. */
@@ -67,6 +71,7 @@ sealed interface ScanEvent {
 class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     private val scanner = DocumentScanner(application)
+    private val recognizer = TextRecognizer(application)
     private val stabilizer = QuadStabilizer()
     private val sessionLock = Mutex()
 
@@ -226,7 +231,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val out = File(sessionDir(), "scan.pdf")
             try {
-                ImagePdf.write(pages.map { it.result }, out, title)
+                ImagePdf.write(getApplication(), pages.map { it.result }, out, title, readText(pages))
                 DocumentFiles.replace(getApplication(), target, out)
                 _events.send(ScanEvent.Saved(target))
             } catch (e: CancellationException) {
@@ -235,10 +240,32 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 _events.send(ScanEvent.Message("Couldn't save: ${e.message ?: e.javaClass.simpleName}"))
             } finally {
                 out.delete()
-                _state.update { it.copy(saving = false) }
+                _state.update { it.copy(saving = false, reading = null) }
             }
         }
     }
+
+    /**
+     * Reads the text on each page (OCR), so the PDF can be searched. A page that can't be read
+     * just gets no text; that never stops the saving.
+     */
+    private suspend fun readText(pages: List<ScanPage>): List<List<OcrWord>> = pages.mapIndexed { i, page ->
+        _state.update { it.copy(reading = (i + 1) to pages.size) }
+        runCatching {
+            val image = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(page.result.path) }
+                ?: return@runCatching emptyList()
+            try {
+                recognizer.recognize(image).map {
+                    OcrWord(it.text, it.left, it.top, it.right, it.bottom, it.lineHeight, it.lineBottom)
+                }
+            } finally {
+                image.recycle()
+            }
+        }.getOrElse { e ->
+            if (e is CancellationException) throw e
+            emptyList()
+        }
+    }.also { _state.update { it.copy(reading = null) } }
 
     /**
      * Instead of saving a new file, hands the pages over (as a temporary PDF) to be added to
@@ -256,14 +283,14 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                     dir.mkdirs()
                 }
                 val out = File(dir, "scan-${System.currentTimeMillis()}.pdf")
-                ImagePdf.write(pages.map { it.result }, out, "Scanned pages")
+                ImagePdf.write(getApplication(), pages.map { it.result }, out, "Scanned pages", readText(pages))
                 _events.send(ScanEvent.PagesReady(out))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _events.send(ScanEvent.Message("Couldn't prepare the pages: ${e.message ?: e.javaClass.simpleName}"))
             } finally {
-                _state.update { it.copy(saving = false) }
+                _state.update { it.copy(saving = false, reading = null) }
             }
         }
     }
@@ -279,6 +306,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         discard()
         scanner.close()
+        recognizer.close()
     }
 
     // --- images ----------------------------------------------------------------------------

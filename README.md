@@ -25,6 +25,7 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 | PDF engine | [MuPDF](https://mupdf.com/) (`com.artifex.mupdf:fitz`) | AGPL-3.0 |
 | UI | Kotlin, Jetpack Compose, Material 3 | Apache-2.0 |
 | Scanning | Adapted from [FairScan](https://github.com/pynicolas/FairScan): CameraX, LiteRT segmentation model, OpenCV | GPL-3.0 / Apache-2.0 |
+| OCR | [Tesseract](https://github.com/tesseract-ocr/tesseract) via [Tesseract4Android](https://github.com/adaptech-cz/Tesseract4Android), tessdata_fast English | Apache-2.0 |
 | Files | Storage Access Framework | (Android platform) |
 
 Minimum Android version: 8.0 (API 26).
@@ -85,7 +86,9 @@ shows them.
    which keeps existing digital signatures valid)
 4. Scanner (done: live page detection, automatic crop, perspective correction and cleanup, colour /
    greyscale / black-and-white, manual corner adjustment, import from photos, save as PDF, or add
-   the scanned pages to an existing document from the viewer's ⋮ menu or the page organizer)
+   the scanned pages to an existing document from the viewer's ⋮ menu or the page organizer). Scanned
+   pages are searchable: text is recognized with Tesseract (English) and laid invisibly over the
+   page image
 5. Forms, signatures, sync
 
 ## License

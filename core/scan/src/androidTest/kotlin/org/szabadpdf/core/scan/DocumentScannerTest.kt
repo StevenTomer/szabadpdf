@@ -66,4 +66,21 @@ class DocumentScannerTest {
         assertEquals(0.2f, p.topLeft.x, 1e-6f)
         assertEquals(0.1f, p.topLeft.y, 1e-6f)
     }
+
+    @Test
+    fun readsTheTextOnAnExtractedPage() = runBlocking {
+        val page = scanner.extract(photo, expected, 0, ScanColor.GRAYSCALE, ScanColor.GRAYSCALE)
+        val recognizer = TextRecognizer(instrumentation.targetContext)
+        try {
+            val words = recognizer.recognize(page)
+            val text = words.joinToString(" ") { it.text }
+            assertTrue("read: $text", text.contains("Meeting notes"))
+            assertTrue("read: $text", text.contains("quick brown fox jumps over the lazy dog"))
+            // Boxes are within the page and in reading order down the page.
+            assertTrue(words.all { it.left >= 0 && it.right <= page.width && it.top >= 0 && it.bottom <= page.height })
+            assertTrue(words.first().text == "Meeting")
+        } finally {
+            recognizer.close()
+        }
+    }
 }

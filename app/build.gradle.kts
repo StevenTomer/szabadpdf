@@ -12,8 +12,8 @@ android {
         applicationId = "org.szabadpdf"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.3.1"
+        versionCode = 5
+        versionName = "0.4.0"
     }
     buildFeatures { compose = true }
     // MuPDF, OpenCV and LiteRT are native libraries; one APK per processor type keeps each small.

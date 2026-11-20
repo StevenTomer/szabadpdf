@@ -162,7 +162,8 @@ fun ScanScreen(
             Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
                 Row(Modifier.padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     CircularProgressIndicator()
-                    Text("Saving…")
+                    val reading = state.reading
+                    Text(if (reading != null) "Reading text… page ${reading.first} of ${reading.second}" else "Saving…")
                 }
             }
         }

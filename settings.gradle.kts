@@ -15,6 +15,10 @@ dependencyResolutionManagement {
         maven("https://maven.ghostscript.com") {
             content { includeGroup("com.artifex.mupdf") }
         }
+        // Tesseract OCR for Android (Apache-2.0), only published on JitPack.
+        maven("https://jitpack.io") {
+            content { includeGroup("cz.adaptech.tesseract4android") }
+        }
     }
 }
 
