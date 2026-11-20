@@ -59,6 +59,8 @@ data class OrganizeState(
     val canRedo: Boolean = false,
     /** False when the app that gave us the file only lets us read it; then only "save as copy" works. */
     val canOverwrite: Boolean = false,
+    /** Grid position to bring into view (e.g. just-inserted pages), until [OrganizeViewModel.focusShown]. */
+    val focus: Int? = null,
 ) {
     val dirty: Boolean get() = canUndo
 }
@@ -151,6 +153,8 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
 
     fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
 
+    fun focusShown() = _state.update { it.copy(focus = null) }
+
     // --- edits -----------------------------------------------------------------------------
 
     fun rotateSelected(degrees: Int) = edit { s ->
@@ -211,11 +215,14 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
             inserted += doc
             val source = inserted.size
             val count = doc.pageCount
+            var at = 0
+            val added = doc.pageSizes.mapIndexed { i, size -> EditPage(nextId++, source, i, size) }
             edit { s ->
-                val at = if (after != null) (after + 1).coerceIn(0, s.pages.size) else insertionPoint(s)
-                val added = doc.pageSizes.mapIndexed { i, size -> EditPage(nextId++, source, i, size) }
+                at = if (after != null) (after + 1).coerceIn(0, s.pages.size) else insertionPoint(s)
                 s.pages.toMutableList().apply { addAll(at, added) }
             }
+            // Show the new pages, selected, so it's clear which they are and they can be moved at once.
+            _state.update { it.copy(selected = added.mapTo(HashSet()) { p -> p.id }, focus = at) }
             val what = if (scanned) "scanned page" else "page"
             _events.send(OrganizeEvent.Message("Added $count $what${if (count == 1) "" else "s"}"))
         }

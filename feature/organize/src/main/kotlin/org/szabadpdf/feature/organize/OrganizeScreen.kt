@@ -270,6 +270,14 @@ private fun PageGrid(
 
     // Scroll while a page is held near the top or bottom edge.
     val dragging = drag.draggingKey != null
+    // Bring just-inserted pages into view. (Coming back from the scanner, the grid starts
+    // where it first opened, so this is what shows the new pages.)
+    LaunchedEffect(state.focus) {
+        val target = state.focus ?: return@LaunchedEffect
+        grid.animateScrollToItem(target.coerceIn(0, (state.pages.size - 1).coerceAtLeast(0)))
+        viewModel.focusShown()
+    }
+
     LaunchedEffect(dragging) {
         if (!dragging) return@LaunchedEffect
         val edge = with(density) { 72.dp.toPx() }
