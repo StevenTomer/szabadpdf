@@ -45,7 +45,9 @@ data class TextSelection(
     val text: String,
 )
 
-enum class AnnotationKind { NOTE, HIGHLIGHT, UNDERLINE, STRIKEOUT, INK, OTHER }
+enum class AnnotationKind { NOTE, HIGHLIGHT, UNDERLINE, STRIKEOUT, INK, TEXT_BOX, SHAPE, OTHER }
+
+enum class ShapeKind { RECTANGLE, ELLIPSE, LINE, ARROW }
 
 /** An annotation on a page. [id] is its PDF object number, stable while the document is open. */
 data class AnnotationInfo(val id: Int, val kind: AnnotationKind, val bounds: PdfRect, val contents: String)

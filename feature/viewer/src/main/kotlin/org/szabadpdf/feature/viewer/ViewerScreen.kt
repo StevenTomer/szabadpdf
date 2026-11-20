@@ -162,6 +162,7 @@ private fun DocumentScreen(
     val versions by viewModel.versions.collectAsState()
     val pendingInk by viewModel.pendingInk.collectAsState()
     val selection by viewModel.selection.collectAsState()
+    val selectionParts by viewModel.selectionParts.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val pageCount = info.pageSizes.size
 
@@ -172,6 +173,8 @@ private fun DocumentScreen(
     var showStyle by rememberSaveable { mutableStateOf(false) }
     var showProtect by rememberSaveable { mutableStateOf(false) }
     var showPad by rememberSaveable { mutableStateOf(false) }
+    /** Where a text box is being typed. */
+    var newTextBox by remember { mutableStateOf<NewNote?>(null) }
     /** The text field or dropdown being filled in. */
     var editingField by remember { mutableStateOf<Pair<Int, FormField>?>(null) }
     val fields by viewModel.fields.collectAsState()
@@ -349,6 +352,7 @@ private fun DocumentScreen(
                 val state = viewModel.annotate.value
                 when (state.currentTool) {
                     Tool.NOTE -> newNote = NewNote(page, PdfPoint(point.x - 12f, point.y - 12f))
+                    Tool.TEXT_BOX -> newTextBox = NewNote(page, point)
                     Tool.SIGNATURE -> if (viewModel.signature.value == null) {
                         signAt = NewNote(page, point) // draw it first, then it goes here
                         showPad = true
@@ -389,6 +393,13 @@ private fun DocumentScreen(
             override fun onLongPressDrag(page: Int, point: PdfPoint) {
                 val anchor = dragAnchor ?: viewModel.selection.value?.takeIf { it.page == page }?.also { dragAnchor = it }
                     ?: return
+                // In one long scroll, a drag past the page's edge carries on into the next pages.
+                val (overPage, overPoint) = if (paged) page to point else pageUnder(page, point)
+                if (overPage != anchor.page) {
+                    if (overPage > anchor.page) viewModel.selectAcross(anchor.page, anchor.start, overPage, overPoint)
+                    else viewModel.selectAcross(overPage, overPoint, anchor.page, anchor.end)
+                    return
+                }
                 // Extend from the long-pressed word towards the finger, in reading order.
                 val line = anchor.rects.first().let { it.bottom - it.top }
                 val forward = point.y > anchor.start.y + line / 2 ||
@@ -397,10 +408,34 @@ private fun DocumentScreen(
                 else viewModel.selectRange(page, point, anchor.end)
             }
 
+            /**
+             * Where a point given relative to [page] really is, in the continuous list: pages are
+             * as wide as the screen and [PageGap] apart.
+             */
+            fun pageUnder(page: Int, point: PdfPoint): Pair<Int, PdfPoint> {
+                val width = zoom.viewport.width.toFloat().takeIf { it > 0 } ?: return page to point
+                val gap = with(density) { PageGap.toPx() }
+                fun pxPerPt(p: Int) = width / info.pageSizes[p].width
+                var p = page
+                var y = point.y * pxPerPt(p) // pixels from the top of page p
+                while (p < info.pageSizes.lastIndex && y > info.pageSizes[p].height * pxPerPt(p)) {
+                    y -= info.pageSizes[p].height * pxPerPt(p) + gap
+                    p++
+                }
+                while (p > 0 && y < 0) {
+                    p--
+                    y += info.pageSizes[p].height * pxPerPt(p) + gap
+                }
+                val k = pxPerPt(p)
+                return p to PdfPoint(point.x * pxPerPt(page) / k, (y / k).coerceIn(0f, info.pageSizes[p].height))
+            }
+
             override fun onSelectionHandles(page: Int, start: PdfPoint, end: PdfPoint) =
                 viewModel.selectRange(page, start, end)
 
-            override fun onStroke(page: Int, points: List<PdfPoint>) = viewModel.addStroke(page, points)
+            override fun onStroke(page: Int, points: List<PdfPoint>, pressure: Float?) = viewModel.addStroke(page, points, pressure)
+
+            override fun onShape(page: Int, start: PdfPoint, end: PdfPoint) = viewModel.addShape(page, start, end)
 
             override fun onErase(page: Int, points: List<PdfPoint>, radius: Float, gesture: Int) =
                 viewModel.erase(page, points, radius, gesture)
@@ -437,6 +472,8 @@ private fun DocumentScreen(
                 selection = selection,
                 versions = versions,
                 fields = fields,
+                shape = annotate.shape,
+                selectionParts = selectionParts,
             ),
             actions = actions,
         )
@@ -453,7 +490,7 @@ private fun DocumentScreen(
                 selection != null -> SelectionBar(
                     canMark = annotate.editable,
                     onCopy = {
-                        selection?.text?.let { copyToClipboard(context, it) }
+                        copyToClipboard(context, viewModel.selectedText)
                         viewModel.clearSelection()
                     },
                     onHighlight = { viewModel.markupSelection(MarkupKind.HIGHLIGHT) },
@@ -541,7 +578,8 @@ private fun DocumentScreen(
                 state = annotate,
                 onTool = { tool ->
                     when {
-                        tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT) -> showStyle = true
+                        tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT, Tool.SHAPE, Tool.TEXT_BOX) ->
+                            showStyle = true
                         // Picking the signature tool without a signature, or picking it again: the pad.
                         tool == Tool.SIGNATURE && (signature == null || annotate.tool == Tool.SIGNATURE) -> {
                             viewModel.selectTool(tool)
@@ -617,6 +655,9 @@ private fun DocumentScreen(
             onHighlighter = viewModel::setHighlighterStyle,
             onMarkupColor = viewModel::setMarkupColor,
             onFingerDraws = viewModel::setFingerDraws,
+            onShape = viewModel::setShape,
+            onTextSize = viewModel::setTextSize,
+            onPressure = viewModel::setPressure,
             onDismiss = { showStyle = false },
         )
     }
@@ -634,11 +675,26 @@ private fun DocumentScreen(
         )
     }
 
+    newTextBox?.let { box ->
+        NoteDialog(
+            initialText = "",
+            isNew = true,
+            title = "Text box",
+            onSave = { text ->
+                viewModel.addTextBox(box.page, box.point, text)
+                newTextBox = null
+            },
+            onDelete = null,
+            onDismiss = { newTextBox = null },
+        )
+    }
+
     tapped?.let { t ->
-        if (t.info.kind == AnnotationKind.NOTE) {
+        if (t.info.kind == AnnotationKind.NOTE || (t.info.kind == AnnotationKind.TEXT_BOX && annotate.editable)) {
             NoteDialog(
                 initialText = t.info.contents,
                 isNew = false,
+                title = if (t.info.kind == AnnotationKind.TEXT_BOX) "Text box" else null,
                 onSave = { text ->
                     viewModel.setNoteText(t.page, t.info.id, text)
                     tapped = null

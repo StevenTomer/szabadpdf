@@ -70,6 +70,7 @@ import org.szabadpdf.core.pdf.FormField
 import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.PageSize
 import org.szabadpdf.core.pdf.PdfPoint
+import org.szabadpdf.core.pdf.ShapeKind
 import org.szabadpdf.core.pdf.TextSelection
 import kotlin.math.ceil
 import kotlin.math.max
@@ -88,7 +89,8 @@ internal interface PageActions {
     /** The finger moved after a long press. */
     fun onLongPressDrag(page: Int, point: PdfPoint)
     fun onSelectionHandles(page: Int, start: PdfPoint, end: PdfPoint)
-    fun onStroke(page: Int, points: List<PdfPoint>)
+    fun onStroke(page: Int, points: List<PdfPoint>, pressure: Float?)
+    fun onShape(page: Int, start: PdfPoint, end: PdfPoint)
     fun onErase(page: Int, points: List<PdfPoint>, radius: Float, gesture: Int)
     fun onTextHighlight(page: Int, start: PdfPoint, end: PdfPoint, finished: Boolean)
     fun onTextHighlightCancelled()
@@ -106,6 +108,9 @@ internal class AnnotationLayer(
     val selection: TextSelection?,
     val versions: PageVersions,
     val fields: Map<Int, List<FormField>> = emptyMap(),
+    val shape: ShapeKind = ShapeKind.RECTANGLE,
+    /** The selection page by page, when it runs over several. */
+    val selectionParts: List<TextSelection> = emptyList(),
 )
 
 internal val PageGap = 8.dp
@@ -440,8 +445,14 @@ private fun PageItem(
     val currentActions by rememberUpdatedState(actions)
     val currentDoubleTap by rememberUpdatedState(onDoubleTap)
     val liveStroke = remember { mutableStateListOf<Offset>() }
+    /** The shape being dragged out, from its first corner to the finger. */
+    var liveShape by remember { mutableStateOf<Pair<Offset, Offset>?>(null) }
     var eraserAt by remember { mutableStateOf<Offset?>(null) }
     val selection = layer.selection?.takeIf { it.page == index }
+    val parts = layer.selectionParts.ifEmpty { listOfNotNull(layer.selection) }
+    val selectedHere = parts.filter { it.page == index }
+    // Handles only for a one-page selection; across pages, long-press again to change it.
+    val handles = parts.size == 1 && selection != null
     LaunchedEffect(index) { actions.onPageShown(index) }
     val fields = layer.fields[index].orEmpty().filter { it.fillable }
 
@@ -465,6 +476,7 @@ private fun PageItem(
                     zoom.panLocked = true
                     zoom.stylusDrawing = stylus
                     val path = mutableListOf(down.position)
+                    var pressureSum = down.pressure
                     var sent = 0
                     fun flushEraser() {
                         if (path.size - sent < 1) return
@@ -473,7 +485,11 @@ private fun PageItem(
                         sent = path.size
                     }
                     liveStroke.clear()
-                    if (erasing) eraserAt = down.position else if (tool != Tool.TEXT_HIGHLIGHT) liveStroke += down.position
+                    when {
+                        erasing -> eraserAt = down.position
+                        tool == Tool.SHAPE -> liveShape = down.position to down.position
+                        tool != Tool.TEXT_HIGHLIGHT -> liveStroke += down.position
+                    }
                     var cancelled = false
                     try {
                         while (true) {
@@ -487,7 +503,9 @@ private fun PageItem(
                             // With a pen, the palm resting on the screen shouldn't scroll either.
                             if (stylus) event.changes.forEach { it.consume() } else change.consume()
                             path += points
+                            pressureSum += change.pressure * points.size
                             when {
+                                tool == Tool.SHAPE -> liveShape = path.first() to change.position
                                 erasing -> {
                                     eraserAt = change.position
                                     if (path.size - sent >= 4) flushEraser()
@@ -505,13 +523,17 @@ private fun PageItem(
                         zoom.panLocked = false
                         zoom.stylusDrawing = false
                         eraserAt = null
+                        liveShape = null
                     }
                     when {
                         erasing -> if (!cancelled) flushEraser()
                         tool == Tool.TEXT_HIGHLIGHT ->
                             if (cancelled) currentActions.onTextHighlightCancelled()
                             else currentActions.onTextHighlight(index, path.first().toPt(), path.last().toPt(), true)
-                        !cancelled -> currentActions.onStroke(index, path.map { it.toPt() })
+                        tool == Tool.SHAPE -> if (!cancelled && (path.last() - path.first()).getDistance() > 4f) {
+                            currentActions.onShape(index, path.first().toPt(), path.last().toPt())
+                        }
+                        !cancelled -> currentActions.onStroke(index, path.map { it.toPt() }, if (stylus) pressureSum / path.size else null)
                     }
                     liveStroke.clear()
                 }
@@ -521,7 +543,7 @@ private fun PageItem(
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     val handleReach = HandleRadius.toPx() * 2.5f / zoom.scale
-                    val sel = currentLayer.selection?.takeIf { it.page == index }
+                    val sel = currentLayer.selection?.takeIf { it.page == index && currentLayer.selectionParts.size <= 1 }
                     val handle = sel?.let { handlePositions(it, 1f / ptPerPx, HandleRadius.toPx() / zoom.scale) }
                         ?.let { (start, end) ->
                             when {
@@ -619,15 +641,19 @@ private fun PageItem(
             }
             val style = layer.inkStyle
             if (style != null && liveStroke.isNotEmpty()) drawInk(liveStroke, style, k)
+            val shape = liveShape
+            if (style != null && shape != null) drawShapePreview(layer.shape, shape.first, shape.second, style, k)
             eraserAt?.let {
                 val r = EraserRadius.toPx() / zoom.scale
                 drawCircle(Color(0x33000000), r, it)
                 drawCircle(Color(0x99000000), r, it, style = Stroke(1.dp.toPx() / zoom.scale))
             }
-            if (selection != null) {
-                for (r in selection.rects) {
+            for (part in selectedHere) {
+                for (r in part.rects) {
                     drawRect(SelectionColor, Offset(r.left * k, r.top * k), Size((r.right - r.left) * k, (r.bottom - r.top) * k))
                 }
+            }
+            if (selection != null && handles) {
                 val radius = HandleRadius.toPx() / zoom.scale
                 val (start, end) = handlePositions(selection, k, radius)
                 drawCircle(HandleColor, radius, start)
@@ -643,6 +669,28 @@ private fun handlePositions(selection: TextSelection, pxPerPt: Float, radius: Fl
     val last = selection.rects.last()
     return Offset(first.left * pxPerPt, first.bottom * pxPerPt + radius) to
         Offset(last.right * pxPerPt, last.bottom * pxPerPt + radius)
+}
+
+private fun DrawScope.drawShapePreview(kind: ShapeKind, a: Offset, b: Offset, style: InkStyle, pxPerPt: Float) {
+    val color = Color(0xFF000000.toInt() or style.color).copy(alpha = style.opacity)
+    val stroke = Stroke(style.width * pxPerPt, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val topLeft = Offset(minOf(a.x, b.x), minOf(a.y, b.y))
+    val size = Size(kotlin.math.abs(b.x - a.x), kotlin.math.abs(b.y - a.y))
+    when (kind) {
+        ShapeKind.RECTANGLE -> drawRect(color, topLeft, size, style = stroke)
+        ShapeKind.ELLIPSE -> drawOval(color, topLeft, size, style = stroke)
+        ShapeKind.LINE, ShapeKind.ARROW -> {
+            drawLine(color, a, b, stroke.width, StrokeCap.Round)
+            if (kind == ShapeKind.ARROW) {
+                val angle = kotlin.math.atan2(b.y - a.y, b.x - a.x)
+                val head = stroke.width * 4 + 8f
+                for (side in listOf(-0.5f, 0.5f)) {
+                    val t = angle + kotlin.math.PI.toFloat() + side
+                    drawLine(color, b, Offset(b.x + head * kotlin.math.cos(t), b.y + head * kotlin.math.sin(t)), stroke.width, StrokeCap.Round)
+                }
+            }
+        }
+    }
 }
 
 private fun DrawScope.drawInk(points: List<Offset>, style: InkStyle, pxPerPt: Float) {

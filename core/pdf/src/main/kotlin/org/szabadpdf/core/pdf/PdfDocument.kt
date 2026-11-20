@@ -305,6 +305,49 @@ class PdfDocument private constructor(
         }
     }
 
+    /**
+     * Adds a text box with its top-left corner at [at]: [text] in Helvetica of [fontSize] points
+     * and [color], sized to fit (kept within the page).
+     */
+    suspend fun addTextBox(index: Int, at: PdfPoint, text: String, fontSize: Float, color: Int): EditState = onEngine {
+        val pageWidth = bounds[index].let { it.x1 - it.x0 }
+        val lines = text.lines()
+        val width = (lines.maxOf { it.length } * fontSize * 0.55f + fontSize).coerceIn(fontSize * 3, pageWidth - at.x)
+        val height = lines.size * fontSize * 1.25f + fontSize * 0.5f
+        edit(index, "Text box") { page ->
+            val p = toPage(index, at)
+            val annot = page.createAnnotation(PDFAnnotation.TYPE_FREE_TEXT)
+            annot.setRect(Rect(p.x, p.y, p.x + width, p.y + height))
+            annot.setDefaultAppearance("Helv", fontSize, rgb(color))
+            annot.setContents(text)
+            annot.setBorderWidth(0f)
+            annot.update()
+        }
+    }
+
+    /** Adds a rectangle, ellipse, line or arrow from [start] to [end], drawn with [style]. */
+    suspend fun addShape(index: Int, kind: ShapeKind, start: PdfPoint, end: PdfPoint, style: InkStyle): EditState = onEngine {
+        edit(index, "Shape") { page ->
+            val a = toPage(index, start)
+            val b = toPage(index, end)
+            val annot = when (kind) {
+                ShapeKind.RECTANGLE, ShapeKind.ELLIPSE -> page.createAnnotation(
+                    if (kind == ShapeKind.RECTANGLE) PDFAnnotation.TYPE_SQUARE else PDFAnnotation.TYPE_CIRCLE,
+                ).apply {
+                    setRect(Rect(minOf(a.x, b.x), minOf(a.y, b.y), maxOf(a.x, b.x), maxOf(a.y, b.y)))
+                }
+                ShapeKind.LINE, ShapeKind.ARROW -> page.createAnnotation(PDFAnnotation.TYPE_LINE).apply {
+                    setLine(a, b)
+                    if (kind == ShapeKind.ARROW) setLineEndingStyles(PDFAnnotation.LINE_ENDING_NONE, PDFAnnotation.LINE_ENDING_OPEN_ARROW)
+                }
+            }
+            annot.setColor(rgb(style.color))
+            annot.setBorderWidth(style.width)
+            if (style.opacity < 1f) annot.setOpacity(style.opacity)
+            annot.update()
+        }
+    }
+
     suspend fun setContents(index: Int, id: Int, text: String): EditState = onEngine {
         edit(index, "Edit note") { page ->
             find(page, id)?.let {
@@ -626,6 +669,8 @@ class PdfDocument private constructor(
             PDFAnnotation.TYPE_UNDERLINE -> AnnotationKind.UNDERLINE
             PDFAnnotation.TYPE_STRIKE_OUT -> AnnotationKind.STRIKEOUT
             PDFAnnotation.TYPE_INK -> AnnotationKind.INK
+            PDFAnnotation.TYPE_FREE_TEXT -> AnnotationKind.TEXT_BOX
+            PDFAnnotation.TYPE_SQUARE, PDFAnnotation.TYPE_CIRCLE, PDFAnnotation.TYPE_LINE -> AnnotationKind.SHAPE
             else -> AnnotationKind.OTHER
         }
         val b = bounds

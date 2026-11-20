@@ -207,4 +207,23 @@ class AnnotateTest {
         assertFalse(doc.isEncrypted())
         assertEquals(12, doc.pageCount)
     }
+
+    @Test
+    fun textBoxesAndShapes() = runBlocking {
+        doc.addTextBox(1, PdfPoint(100f, 400f), "Check this figure", 14f, 0xD32F2F)
+        doc.addShape(1, ShapeKind.RECTANGLE, PdfPoint(100f, 500f), PdfPoint(300f, 600f), InkStyle(0x1E5BD8, 2f))
+        doc.addShape(1, ShapeKind.ELLIPSE, PdfPoint(350f, 500f), PdfPoint(450f, 600f), InkStyle(0x1E5BD8, 2f))
+        doc.addShape(1, ShapeKind.ARROW, PdfPoint(100f, 700f), PdfPoint(300f, 650f), InkStyle(0x000000, 2f))
+        val kinds = doc.annotations(1).map { it.kind }
+        assertEquals(listOf(AnnotationKind.TEXT_BOX, AnnotationKind.SHAPE, AnnotationKind.SHAPE, AnnotationKind.SHAPE), kinds)
+        val box = doc.annotations(1).first()
+        assertEquals("Check this figure", box.contents)
+        assertTrue("text box starts at the tap: ${box.bounds}", kotlin.math.abs(box.bounds.left - 100f) < 2f && kotlin.math.abs(box.bounds.top - 400f) < 2f)
+        // The text box's text is drawn on the page and can be found.
+        assertEquals(1, doc.search(1, "this figure").size)
+        // The rectangle's outline is drawn (left edge at x = 100).
+        val bitmap = doc.renderPage(1, 612)
+        assertNotEquals(Color.WHITE, bitmap.getPixel(100, 550))
+        assertEquals(Color.WHITE, bitmap.getPixel(200, 550))
+    }
 }

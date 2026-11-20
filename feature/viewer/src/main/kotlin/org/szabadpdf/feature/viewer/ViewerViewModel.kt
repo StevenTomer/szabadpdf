@@ -24,6 +24,7 @@ import org.szabadpdf.core.pdf.InkStyle
 import org.szabadpdf.core.pdf.LinkTarget
 import org.szabadpdf.core.pdf.MarkupKind
 import org.szabadpdf.core.pdf.PdfPoint
+import org.szabadpdf.core.pdf.ShapeKind
 import org.szabadpdf.core.pdf.TextSelection
 import org.szabadpdf.core.pdf.OutlineEntry
 import org.szabadpdf.core.pdf.PageSize
@@ -81,6 +82,10 @@ enum class Tool(val draws: Boolean) {
     NOTE(false),
     /** Tap to place the saved signature. */
     SIGNATURE(false),
+    /** Tap to type a text box. */
+    TEXT_BOX(false),
+    /** Drag to draw a rectangle, oval, line or arrow. */
+    SHAPE(true),
     ERASER(true),
 }
 
@@ -93,6 +98,10 @@ data class AnnotateState(
     val markupColor: Int = 0xFFEB3B,
     /** When off, only a stylus draws and fingers scroll. Turned off the first time a stylus is used. */
     val fingerDraws: Boolean = true,
+    val shape: ShapeKind = ShapeKind.RECTANGLE,
+    val textSize: Float = 14f,
+    /** A pen's pressure sets each stroke's width (light strokes thinner, firm ones thicker). */
+    val pressure: Boolean = true,
     val edits: EditState = EditState(),
     val saving: Boolean = false,
     val canOverwrite: Boolean = false,
@@ -107,7 +116,7 @@ data class AnnotateState(
     val dirty: Boolean get() = edits.canUndo || restored
     val currentTool: Tool? get() = if (active) tool else null
     val inkStyle: InkStyle? get() = when (currentTool) {
-        Tool.PEN -> pen
+        Tool.PEN, Tool.SHAPE -> pen
         Tool.HIGHLIGHTER -> highlighter
         else -> null
     }
@@ -147,7 +156,14 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     val pendingInk: StateFlow<Map<Int, List<PendingStroke>>> = _pending.asStateFlow()
 
     private val _selection = MutableStateFlow<TextSelection?>(null)
+
+    /** The selected text's first (or only) page. */
     val selection: StateFlow<TextSelection?> = _selection.asStateFlow()
+
+    private val _selectionParts = MutableStateFlow<List<TextSelection>>(emptyList())
+
+    /** The selection page by page, when it runs over several (else just [selection]). */
+    val selectionParts: StateFlow<List<TextSelection>> = _selectionParts.asStateFlow()
 
     private val _paged = MutableStateFlow(prefs.getBoolean(KEY_PAGED, true))
 
@@ -451,6 +467,22 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
 
     fun setFingerDraws(enabled: Boolean) = updatePrefs { it.copy(fingerDraws = enabled) }
 
+    fun setShape(kind: ShapeKind) = updatePrefs { it.copy(shape = kind) }
+
+    fun setTextSize(size: Float) = updatePrefs { it.copy(textSize = size) }
+
+    fun setPressure(enabled: Boolean) = updatePrefs { it.copy(pressure = enabled) }
+
+    fun addTextBox(page: Int, at: PdfPoint, text: String) {
+        val s = _annotate.value
+        editPage(page, "Couldn't add the text box") { it.addTextBox(page, at, text, s.textSize, s.pen.color) }
+    }
+
+    fun addShape(page: Int, start: PdfPoint, end: PdfPoint) {
+        val s = _annotate.value
+        editPage(page, "Couldn't add the shape") { it.addShape(page, s.shape, start, end, s.pen) }
+    }
+
     /** The first time a stylus is used, let fingers scroll instead of draw. */
     fun onStylusSeen() {
         if (prefs.getBoolean(KEY_STYLUS_SEEN, false)) return
@@ -461,9 +493,14 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    fun addStroke(page: Int, points: List<PdfPoint>) {
+    /** [pressure] is the pen's average pressure over the stroke (null for fingers). */
+    fun addStroke(page: Int, points: List<PdfPoint>, pressure: Float? = null) {
         val doc = document ?: return
-        val style = _annotate.value.inkStyle ?: return
+        val base = _annotate.value.inkStyle ?: return
+        // Normal pressure (about half) keeps the chosen width; light to firm spans about 0.5x to 1.5x.
+        val style = if (pressure != null && _annotate.value.pressure) {
+            base.copy(width = base.width * (0.5f + pressure.coerceIn(0f, 1f) * 2f).coerceIn(0.4f, 1.6f))
+        } else base
         if (points.isEmpty()) return
         val stroke = PendingStroke(points, style)
         _pending.update { it + (page to (it[page].orEmpty() + stroke)) }
@@ -592,7 +629,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         val doc = document ?: return
         selectJob?.cancel()
         selectJob = viewModelScope.launch {
-            _selection.value = runCatching { doc.selectWord(page, point) }.getOrNull()
+            setSelection(listOfNotNull(runCatching { doc.selectWord(page, point) }.getOrNull()))
         }
     }
 
@@ -603,16 +640,50 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         selectJob = viewModelScope.launch {
             val selection = runCatching { doc.selectText(page, start, end) }.getOrNull()
             // Keep the endpoints the finger chose even when they're between words.
-            _selection.value = selection?.copy(start = start, end = end)
+            setSelection(listOfNotNull(selection?.copy(start = start, end = end)))
         }
     }
 
+    /**
+     * Selects from [start] on [startPage] to [end] on a later [endPage]: the rest of the first
+     * page, all of any pages between, and the beginning of the last.
+     */
+    fun selectAcross(startPage: Int, start: PdfPoint, endPage: Int, end: PdfPoint) {
+        if (startPage == endPage) return selectRange(startPage, start, end)
+        val doc = document ?: return
+        val sizes = (state.value as? ViewerState.Ready)?.document?.pageSizes ?: return
+        selectJob?.cancel()
+        selectJob = viewModelScope.launch {
+            val parts = (startPage..endPage).mapNotNull { page ->
+                val size = sizes[page]
+                val from = if (page == startPage) start else PdfPoint(0f, 0f)
+                val to = if (page == endPage) end else PdfPoint(size.width, size.height)
+                runCatching { doc.selectText(page, from, to) }.getOrNull()?.copy(start = from, end = to)
+            }
+            setSelection(parts)
+        }
+    }
+
+    private fun setSelection(parts: List<TextSelection>) {
+        _selection.value = parts.firstOrNull()
+        _selectionParts.value = parts
+    }
+
+    /** The selected text, across pages. */
+    val selectedText: String get() = _selectionParts.value.joinToString("\n") { it.text }
+
     fun clearSelection() {
         selectJob?.cancel()
-        _selection.value = null
+        setSelection(emptyList())
     }
 
     fun markupSelection(kind: MarkupKind) {
+        val parts = _selectionParts.value
+        if (parts.size > 1) {
+            clearSelection()
+            parts.forEach { part -> markPart(part, kind) }
+            return
+        }
         val s = _selection.value ?: return
         val color = when (kind) {
             MarkupKind.HIGHLIGHT -> _annotate.value.markupColor
@@ -621,6 +692,15 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         }
         clearSelection()
         editPage(s.page, "Couldn't mark the text") { it.addMarkup(s.page, s.start, s.end, kind, color) }
+    }
+
+    private fun markPart(part: TextSelection, kind: MarkupKind) {
+        val color = when (kind) {
+            MarkupKind.HIGHLIGHT -> _annotate.value.markupColor
+            MarkupKind.UNDERLINE -> 0x1E88E5
+            MarkupKind.STRIKEOUT -> 0xE53935
+        }
+        editPage(part.page, "Couldn't mark the text") { it.addMarkup(part.page, part.start, part.end, kind, color) }
     }
 
     /** The text-highlight tool: drag across text, highlighted on release. */
@@ -872,6 +952,9 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             .putInt("hl_color", s.highlighter.color).putFloat("hl_width", s.highlighter.width)
             .putInt("markup_color", s.markupColor)
             .putBoolean("finger_draws", s.fingerDraws)
+            .putString("shape", s.shape.name)
+            .putFloat("text_size", s.textSize)
+            .putBoolean("pressure", s.pressure)
             .apply()
     }
 
@@ -886,6 +969,9 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             ),
             markupColor = prefs.getInt("markup_color", d.markupColor),
             fingerDraws = prefs.getBoolean("finger_draws", d.fingerDraws),
+            shape = runCatching { ShapeKind.valueOf(prefs.getString("shape", null)!!) }.getOrDefault(d.shape),
+            textSize = prefs.getFloat("text_size", d.textSize),
+            pressure = prefs.getBoolean("pressure", d.pressure),
         )
     }
 

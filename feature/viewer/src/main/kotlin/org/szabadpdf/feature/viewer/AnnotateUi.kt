@@ -66,6 +66,13 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import org.szabadpdf.core.pdf.AnnotationKind
 import org.szabadpdf.core.pdf.InkStyle
+import org.szabadpdf.core.pdf.ShapeKind
+import androidx.compose.material3.FilterChip
+import androidx.compose.material.icons.filled.CropSquare
+import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.PanoramaFishEye
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 
 private val PenColors = listOf(0x1A1A1A, 0x1E5BD8, 0xD32F2F, 0x2E7D32, 0x7B1FA2, 0xEF6C00)
 private val PenWidths = listOf(0.75f, 1.5f, 3f, 6f)
@@ -99,6 +106,8 @@ internal fun AnnotateToolbar(
             ToolButton(Tool.HIGHLIGHTER, Icons.Filled.Brush, "Highlighter pen", state.tool, onTool, accent = state.highlighter.color)
             ToolButton(Tool.TEXT_HIGHLIGHT, Icons.Filled.BorderColor, "Highlight text", state.tool, onTool, accent = state.markupColor)
             ToolButton(Tool.NOTE, Icons.AutoMirrored.Filled.StickyNote2, "Note", state.tool, onTool)
+            ToolButton(Tool.TEXT_BOX, Icons.Filled.TextFields, "Text box", state.tool, onTool)
+            ToolButton(Tool.SHAPE, shapeIcon(state.shape), "Shape", state.tool, onTool, accent = state.pen.color)
             ToolButton(Tool.SIGNATURE, Icons.Filled.Gesture, "Signature", state.tool, onTool)
             ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
             IconButton(onClick = onStyle) { Icon(Icons.Filled.Palette, "Pen settings") }
@@ -152,6 +161,9 @@ internal fun StyleSheet(
     onHighlighter: (InkStyle) -> Unit,
     onMarkupColor: (Int) -> Unit,
     onFingerDraws: (Boolean) -> Unit,
+    onShape: (ShapeKind) -> Unit,
+    onTextSize: (Float) -> Unit,
+    onPressure: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -166,6 +178,34 @@ internal fun StyleSheet(
 
             SectionTitle("Text highlight")
             ColorRow(HighlighterColors, state.markupColor, onMarkupColor)
+
+            SectionTitle("Shapes (in the pen's colour and width)")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((kind, label) in listOf(
+                    ShapeKind.RECTANGLE to "Box", ShapeKind.ELLIPSE to "Oval", ShapeKind.LINE to "Line", ShapeKind.ARROW to "Arrow",
+                )) {
+                    FilterChip(selected = state.shape == kind, onClick = { onShape(kind) }, label = { Text(label) })
+                }
+            }
+
+            SectionTitle("Text boxes")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for ((size, label) in listOf(10f to "Small", 14f to "Medium", 20f to "Large")) {
+                    FilterChip(selected = state.textSize == size, onClick = { onTextSize(size) }, label = { Text(label) })
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Pen pressure", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "With a stylus, firmer strokes come out thicker",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(checked = state.pressure, onCheckedChange = onPressure)
+            }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -270,6 +310,7 @@ internal fun SelectionBar(
 internal fun NoteDialog(
     initialText: String,
     isNew: Boolean,
+    title: String? = null,
     onSave: (String) -> Unit,
     onDelete: (() -> Unit)?,
     onDismiss: () -> Unit,
@@ -279,7 +320,7 @@ internal fun NoteDialog(
     LaunchedEffect(Unit) { if (isNew) focus.requestFocus() }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (isNew) "New note" else "Note") },
+        title = { Text(title ?: if (isNew) "New note" else "Note") },
         text = {
             OutlinedTextField(
                 value = text,
@@ -310,6 +351,8 @@ internal fun DeleteAnnotationDialog(kind: AnnotationKind, onDelete: () -> Unit, 
         AnnotationKind.STRIKEOUT -> "strikeout"
         AnnotationKind.INK -> "drawing"
         AnnotationKind.NOTE -> "note"
+        AnnotationKind.TEXT_BOX -> "text box"
+        AnnotationKind.SHAPE -> "shape"
         AnnotationKind.OTHER -> "annotation"
     }
     AlertDialog(
@@ -519,4 +562,11 @@ private fun size(bytes: Long): String = when {
     bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
     bytes >= 1_000 -> "${bytes / 1_000} kB"
     else -> "$bytes bytes"
+}
+
+private fun shapeIcon(kind: ShapeKind): ImageVector = when (kind) {
+    ShapeKind.RECTANGLE -> Icons.Filled.CropSquare
+    ShapeKind.ELLIPSE -> Icons.Filled.PanoramaFishEye
+    ShapeKind.LINE -> Icons.Filled.Remove
+    ShapeKind.ARROW -> Icons.AutoMirrored.Filled.ArrowForward
 }
