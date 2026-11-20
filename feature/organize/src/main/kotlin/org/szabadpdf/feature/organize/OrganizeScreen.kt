@@ -240,6 +240,10 @@ fun OrganizeScreen(
 
     if (state.status == OrganizeStatus.Saving) SavingDialog()
 
+    state.unlock?.let { request ->
+        UnlockDialog(request, onUnlock = viewModel::unlock, onSkip = { viewModel.unlock(null) })
+    }
+
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },

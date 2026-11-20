@@ -172,6 +172,10 @@ fun MergeScreen(viewModel: MergeViewModel, onSaved: (Uri) -> Unit, onClose: () -
         }
     }
 
+    state.unlock?.let { request ->
+        UnlockDialog(request, onUnlock = viewModel::unlock, onSkip = { viewModel.unlock(null) })
+    }
+
     if (state.saving) {
         Dialog(onDismissRequest = {}, properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)) {
             Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {

@@ -361,3 +361,67 @@ internal val EraserIcon: ImageVector by lazy {
         fill = SolidColor(Color.Black),
     ).build()
 }
+
+/** Set, change or remove the password needed to open the PDF. */
+@Composable
+internal fun ProtectDialog(
+    encrypted: Boolean,
+    onSet: (String) -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by rememberSaveable { mutableStateOf("") }
+    var confirm by rememberSaveable { mutableStateOf("") }
+    val problem = when {
+        password.isEmpty() -> null
+        ',' in password -> "Passwords can't contain commas"
+        confirm.isNotEmpty() && confirm != password -> "The passwords don't match"
+        else -> null
+    }
+    val ready = password.isNotEmpty() && confirm == password && problem == null
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (encrypted) "Password" else "Protect with a password") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (encrypted) "This PDF needs a password to open. Set a new one, or remove it."
+                    else "Anyone opening this PDF will need the password. A forgotten password can't be " +
+                        "recovered, so keep it somewhere safe.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(if (encrypted) "New password" else "Password") },
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                    ),
+                )
+                OutlinedTextField(
+                    value = confirm,
+                    onValueChange = { confirm = it },
+                    label = { Text("Repeat password") },
+                    singleLine = true,
+                    isError = problem != null,
+                    supportingText = { problem?.let { Text(it) } },
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                    ),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSet(password) }, enabled = ready) { Text(if (encrypted) "Change" else "Protect") }
+        },
+        dismissButton = {
+            Row {
+                if (encrypted) TextButton(onClick = onRemove) { Text("Remove password") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        },
+    )
+}

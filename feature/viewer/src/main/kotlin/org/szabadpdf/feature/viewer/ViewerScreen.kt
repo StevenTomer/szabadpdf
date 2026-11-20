@@ -168,6 +168,9 @@ private fun DocumentScreen(
     var showOutline by rememberSaveable { mutableStateOf(false) }
     var showGoTo by rememberSaveable { mutableStateOf(false) }
     var showStyle by rememberSaveable { mutableStateOf(false) }
+    var showProtect by rememberSaveable { mutableStateOf(false) }
+    /** A password change waiting for the user to pick where the protected copy goes. */
+    var pendingPassword by remember { mutableStateOf<ViewerViewModel.PasswordChange?>(null) }
     var newNote by remember { mutableStateOf<NewNote?>(null) }
     var tapped by remember { mutableStateOf<AnnotationTap?>(null) }
     /** Set while asking whether to save; runs once saved (or discarded, if allowed). */
@@ -222,6 +225,28 @@ private fun DocumentScreen(
             )
         }
         viewModel.save(target = uri)
+    }
+
+    // Files we can't write to get the password change as a new copy.
+    val protectedCopyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val change = pendingPassword
+        pendingPassword = null
+        if (uri == null || change == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        viewModel.setPassword(change.password, uri)
+    }
+
+    fun applyPassword(newPassword: String?) {
+        if (annotate.canOverwrite) {
+            viewModel.setPassword(newPassword)
+        } else {
+            pendingPassword = ViewerViewModel.PasswordChange(newPassword)
+            protectedCopyPicker.launch(info.name)
+        }
     }
 
     fun save(then: (() -> Unit)? = null) {
@@ -466,6 +491,7 @@ private fun DocumentScreen(
                                 onShare = { share() },
                                 onSaveAs = { copyPicker.launch(info.name) },
                                 onPrint = { print() },
+                                onPassword = { showProtect = true },
                             )
                         },
                         colors = barColors,
@@ -616,6 +642,21 @@ private fun DocumentScreen(
                 }
             } else null,
             onDismiss = { unsavedPrompt = null },
+        )
+    }
+
+    if (showProtect) {
+        ProtectDialog(
+            encrypted = annotate.encrypted,
+            onSet = {
+                showProtect = false
+                applyPassword(it)
+            },
+            onRemove = {
+                showProtect = false
+                applyPassword(null)
+            },
+            onDismiss = { showProtect = false },
         )
     }
 

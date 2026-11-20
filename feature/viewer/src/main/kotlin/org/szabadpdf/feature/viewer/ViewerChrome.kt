@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.SaveAs
@@ -133,6 +134,7 @@ internal fun MoreMenu(
     onShare: () -> Unit,
     onSaveAs: () -> Unit,
     onPrint: () -> Unit,
+    onPassword: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
     fun pick(action: () -> Unit) = {
@@ -176,6 +178,13 @@ internal fun MoreMenu(
                     text = { Text("Save as…") },
                     leadingIcon = { Icon(Icons.Filled.SaveAs, null) },
                     onClick = pick(onSaveAs),
+                )
+            }
+            if (canSave) {
+                DropdownMenuItem(
+                    text = { Text("Password…") },
+                    leadingIcon = { Icon(Icons.Filled.Lock, null) },
+                    onClick = pick(onPassword),
                 )
             }
             DropdownMenuItem(

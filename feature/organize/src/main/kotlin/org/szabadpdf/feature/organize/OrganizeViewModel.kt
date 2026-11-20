@@ -61,9 +61,14 @@ data class OrganizeState(
     val canOverwrite: Boolean = false,
     /** Grid position to bring into view (e.g. just-inserted pages), until [OrganizeViewModel.focusShown]. */
     val focus: Int? = null,
+    /** Waiting for the password of a protected file being inserted. */
+    val unlock: UnlockRequest? = null,
 ) {
     val dirty: Boolean get() = canUndo
 }
+
+/** A protected file that needs its password before it can be used. */
+data class UnlockRequest(val name: String, val wrongPassword: Boolean)
 
 sealed interface OrganizeEvent {
     data class Saved(val uri: Uri) : OrganizeEvent
@@ -127,6 +132,8 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
 
     /** Drops the document and every unsaved change. */
     fun discard() {
+        pendingUnlock?.doc?.close()
+        pendingUnlock = null
         openJob?.cancel()
         main?.close()
         main = null
@@ -214,18 +221,54 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
                 _events.send(OrganizeEvent.Message("Couldn't open that file"))
                 return@launch
             }
-            if (doc.isLocked || !doc.isEditable || doc.pageCount == 0) {
-                doc.close()
-                _events.send(
-                    OrganizeEvent.Message(
-                        if (doc.isLocked) "Password-protected PDFs can't be inserted yet" else "That file has no pages to insert",
-                    ),
-                )
+            if (doc.isLocked) {
+                // Ask for its password; insertion carries on in unlock().
+                _state.update { it.copy(unlock = UnlockRequest(nameOf(from), wrongPassword = false)) }
+                pendingUnlock = PendingInsert(doc, after, scanned)
                 return@launch
+            }
+            insertOpened(doc, after, scanned)
+        }
+    }
+
+    /** The password for the protected file being inserted; null gives up on it. */
+    fun unlock(password: String?) {
+        val pending = pendingUnlock ?: return
+        viewModelScope.launch {
+            if (password == null) {
+                pendingUnlock = null
+                pending.doc.close()
+                _state.update { it.copy(unlock = null) }
+            } else if (pending.doc.authenticate(password)) {
+                pendingUnlock = null
+                _state.update { it.copy(unlock = null) }
+                insertOpened(pending.doc, pending.after, pending.scanned)
+            } else {
+                _state.update { it.copy(unlock = it.unlock?.copy(wrongPassword = true)) }
+            }
+        }
+    }
+
+    private class PendingInsert(val doc: PdfDocument, val after: Int?, val scanned: Boolean)
+
+    private var pendingUnlock: PendingInsert? = null
+
+    private fun nameOf(uri: Uri): String = runCatching {
+        getApplication<Application>().contentResolver
+            .query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { if (it.moveToFirst()) it.getString(0) else null }
+    }.getOrNull() ?: "This PDF"
+
+    private suspend fun insertOpened(doc: PdfDocument, after: Int?, scanned: Boolean) {
+        run {
+            if (!doc.isEditable || doc.pageCount == 0) {
+                doc.close()
+                _events.send(OrganizeEvent.Message("That file has no pages to insert"))
+                return
             }
             if (main == null) { // discarded meanwhile
                 doc.close()
-                return@launch
+                return
             }
             inserted += doc
             val source = inserted.size

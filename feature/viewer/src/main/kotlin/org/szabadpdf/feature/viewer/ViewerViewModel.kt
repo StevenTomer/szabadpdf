@@ -93,6 +93,8 @@ data class AnnotateState(
     val saving: Boolean = false,
     val canOverwrite: Boolean = false,
     val editable: Boolean = false,
+    /** The file needs a password to open. */
+    val encrypted: Boolean = false,
     /** Opened from a draft with edits from an earlier session (which can't be undone step by step). */
     val restored: Boolean = false,
 ) {
@@ -289,6 +291,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
                 editable = doc.isEditable,
                 canOverwrite = DocumentFiles.canWrite(getApplication(), current),
                 restored = restoredDraft,
+                encrypted = doc.isEncrypted(),
             )
         }
         if (restoredDraft) _events.trySend(ViewerEvent.Message("Restored your unsaved changes from last time"))
@@ -542,7 +545,16 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     // --- saving ----------------------------------------------------------------------------
 
     /** Saves over the open file (when [target] is null) or to [target], a new file. */
-    fun save(target: Uri? = null) {
+    /**
+     * Saves with a new open password ([newPassword]), or with none when it's null. Like [save],
+     * over the open file or to [target].
+     */
+    fun setPassword(newPassword: String?, target: Uri? = null) = save(target, PasswordChange(newPassword))
+
+    /** A change of the file's open password; null removes it. */
+    class PasswordChange(val password: String?)
+
+    fun save(target: Uri? = null, passwordChange: PasswordChange? = null) {
         val doc = document ?: return
         val current = uri ?: return
         if (_annotate.value.saving) return
@@ -550,7 +562,11 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         viewModelScope.launch {
             val destination = target ?: current
             try {
-                doc.saveTo(getApplication(), destination)
+                if (passwordChange != null) doc.saveWithPassword(getApplication(), destination, passwordChange.password)
+                else doc.saveTo(getApplication(), destination)
+                passwordChange?.let { change ->
+                    _events.send(ViewerEvent.Message(if (change.password == null) "Password removed" else "Password set"))
+                }
                 if (target != null) {
                     // The app switches to the new file; this one is left unchanged.
                     _annotate.update { it.copy(saving = false) }
@@ -559,14 +575,16 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
                 }
                 // The file underneath has been replaced; read from the new one from now on.
                 val fresh = PdfDocument.open(getApplication(), current)
+                if (passwordChange != null) password = passwordChange.password
                 password?.let { fresh.authenticate(it) }
+                val encrypted = fresh.isEncrypted()
                 document = fresh
                 doc.close()
                 outline = null
                 deleteDraft(current)
                 restoredDraft = false
                 originalFingerprint = null
-                _annotate.update { it.copy(saving = false, edits = EditState(), restored = false) }
+                _annotate.update { it.copy(saving = false, edits = EditState(), restored = false, encrypted = encrypted) }
                 _events.send(ViewerEvent.Saved)
             } catch (e: CancellationException) {
                 throw e

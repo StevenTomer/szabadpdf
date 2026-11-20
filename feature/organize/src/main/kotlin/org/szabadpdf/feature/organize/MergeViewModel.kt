@@ -19,7 +19,7 @@ import org.szabadpdf.core.pdf.PdfDocument
 import java.io.File
 
 /** One file to merge. [document] is open for reading its pages. */
-class MergeFile(val id: Long, val uri: Uri, val name: String, val document: PdfDocument) {
+class MergeFile(val id: Long, val uri: Uri, val name: String, val document: PdfDocument, val password: String? = null) {
     val pageCount: Int get() = document.pageCount
 }
 
@@ -28,6 +28,8 @@ data class MergeState(
     /** Files still being opened. */
     val adding: Int = 0,
     val saving: Boolean = false,
+    /** Waiting for a protected file's password. */
+    val unlock: UnlockRequest? = null,
 ) {
     val pageCount: Int get() = files.sumOf { it.pageCount }
 }
@@ -57,8 +59,8 @@ class MergeViewModel(application: Application) : AndroidViewModel(application) {
                     val doc = PdfDocument.open(getApplication(), uri)
                     when {
                         doc.isLocked -> {
-                            doc.close()
-                            _events.send(MergeEvent.Message("${nameOf(uri)} is password-protected and can't be merged yet"))
+                            // Asked for once the others are in; see unlock().
+                            locked += uri to doc
                             null
                         }
                         !doc.isEditable || doc.pageCount == 0 -> {
@@ -75,6 +77,37 @@ class MergeViewModel(application: Application) : AndroidViewModel(application) {
                     null
                 }
                 _state.update { s -> s.copy(files = if (file != null) s.files + file else s.files, adding = s.adding - 1) }
+            }
+            askNextPassword()
+        }
+    }
+
+    /** Protected files waiting for their passwords, in order. */
+    private val locked = ArrayDeque<Pair<Uri, PdfDocument>>()
+
+    private fun askNextPassword() {
+        val next = locked.firstOrNull()
+        _state.update { it.copy(unlock = next?.let { (uri, _) -> UnlockRequest(nameOf(uri), wrongPassword = false) }) }
+    }
+
+    /** The password for the protected file being asked about; null leaves that file out. */
+    fun unlock(password: String?) {
+        val (uri, doc) = locked.firstOrNull() ?: return
+        viewModelScope.launch {
+            when {
+                password == null -> {
+                    locked.removeFirst()
+                    doc.close()
+                    askNextPassword()
+                }
+                doc.authenticate(password) -> {
+                    locked.removeFirst()
+                    val file = if (doc.pageCount > 0) MergeFile(nextId++, uri, nameOf(uri), doc, password) else null
+                    if (file == null) doc.close()
+                    _state.update { s -> s.copy(files = if (file != null) s.files + file else s.files) }
+                    askNextPassword()
+                }
+                else -> _state.update { it.copy(unlock = it.unlock?.copy(wrongPassword = true)) }
             }
         }
     }
@@ -103,7 +136,10 @@ class MergeViewModel(application: Application) : AndroidViewModel(application) {
             // bookmarks and other settings carry over.
             var base: PdfDocument? = null
             try {
-                base = PdfDocument.open(app, files.first().uri)
+                val first = files.first()
+                base = PdfDocument.open(app, first.uri).also { doc ->
+                    if (doc.isLocked && first.password?.let { doc.authenticate(it) } != true) error("Wrong password")
+                }
                 val specs = files.flatMapIndexed { i, file ->
                     (0 until file.pageCount).map { page -> PageSpec.Existing(page, from = if (i == 0) null else file.document) }
                 }
@@ -127,6 +163,8 @@ class MergeViewModel(application: Application) : AndroidViewModel(application) {
     /** Closes everything and starts over. */
     fun clear() {
         _state.value.files.forEach { it.document.close() }
+        locked.forEach { it.second.close() }
+        locked.clear()
         _state.value = MergeState()
     }
 
