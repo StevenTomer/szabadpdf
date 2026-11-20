@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.organize
 
+import org.szabadpdf.core.ui.Tip
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -94,7 +95,7 @@ fun MergeScreen(viewModel: MergeViewModel, onSaved: (Uri) -> Unit, onClose: () -
     Scaffold(
         topBar = {
             TopAppBar(
-                navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                navigationIcon = { Tip("Back") { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } } },
                 title = {
                     Column {
                         Text("Merge PDFs")
@@ -153,13 +154,19 @@ fun MergeScreen(viewModel: MergeViewModel, onSaved: (Uri) -> Unit, onClose: () -
                         supportingContent = { Text(if (file.pageCount == 1) "1 page" else "${file.pageCount} pages") },
                         trailingContent = {
                             Row {
-                                IconButton(onClick = { viewModel.move(file.id, -1) }, enabled = index > 0) {
-                                    Icon(Icons.Filled.KeyboardArrowUp, "Move up")
+                                Tip("Move up") {
+                                    IconButton(onClick = { viewModel.move(file.id, -1) }, enabled = index > 0) {
+                                        Icon(Icons.Filled.KeyboardArrowUp, "Move up")
+                                    }
                                 }
-                                IconButton(onClick = { viewModel.move(file.id, 1) }, enabled = index < state.files.size - 1) {
-                                    Icon(Icons.Filled.KeyboardArrowDown, "Move down")
+                                Tip("Move down") {
+                                    IconButton(onClick = { viewModel.move(file.id, 1) }, enabled = index < state.files.size - 1) {
+                                        Icon(Icons.Filled.KeyboardArrowDown, "Move down")
+                                    }
                                 }
-                                IconButton(onClick = { viewModel.remove(file.id) }) { Icon(Icons.Filled.Close, "Remove") }
+                                Tip("Remove") {
+                                    IconButton(onClick = { viewModel.remove(file.id) }) { Icon(Icons.Filled.Close, "Remove") }
+                                }
                             }
                         },
                         modifier = Modifier.animateItem(),

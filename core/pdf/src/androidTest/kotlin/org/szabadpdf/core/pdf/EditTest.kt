@@ -159,4 +159,37 @@ class EditTest {
         assertEquals(2, result.search(14, "szabad").size)
         assertEquals("SzabadPDF sample", result.title())
     }
+
+    @Test
+    fun flipsPagesWithTheirAnnotations() = runBlocking {
+        // Page 1 has a black square in its bottom-left corner; add a drawing near the top left.
+        val annotated = File(context.cacheDir, "edit-flip.pdf").apply { delete() }
+        open(sample).apply {
+            addInk(0, listOf(PdfPoint(60f, 100f), PdfPoint(160f, 100f)), InkStyle(0xFF0000, 6f))
+            saveTo(context, Uri.fromFile(annotated))
+        }
+        open(annotated).saveRearranged(
+            listOf(PageSpec.Existing(0, flipH = true), PageSpec.Existing(1, flipV = true), PageSpec.Existing(0, rotation = 90, flipH = true).let {
+                it.copy(from = open(annotated))
+            }),
+            out,
+        )
+        val result = open(out)
+        val flipped = result.renderPage(0, 612)
+        assertEquals("square now bottom right", Color.BLACK, flipped.getPixel(602, 782))
+        assertEquals(Color.WHITE, flipped.getPixel(10, 782))
+        val ink = result.annotations(0).single { it.kind == AnnotationKind.INK }.bounds
+        assertTrue("drawing mirrored: $ink", ink.left > 430f && ink.right < 570f && ink.top < 110f)
+        assertTrue("drawing is drawn there", flipped.getPixel(500, 100).let { Color.red(it) > 200 && Color.green(it) < 100 })
+        assertEquals("text still found", 1, result.search(0, "Page 1").size)
+
+        // Upside down: page 2's heading is now at the bottom.
+        val heading = result.search(1, "Page 2")[0][0]
+        assertTrue("heading at the bottom: $heading", heading.top > 600f)
+
+        // Flipped, then turned clockwise: the square goes bottom right -> bottom left.
+        val turned = result.renderPage(2, 792)
+        assertEquals(PageSize(792f, 612f), result.pageSizes[2])
+        assertEquals(Color.BLACK, turned.getPixel(10, 602))
+    }
 }

@@ -7,14 +7,15 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 ## Features
 
 - View PDFs page by page or continuously: zoom, search, table of contents, links, page
-  thumbnails, night mode; several documents open in tabs
+  thumbnails, night mode; several documents open in tabs (drag to reorder); tooltips on icons
+  when a stylus hovers
 - Annotate: pen (pressure-sensitive with a stylus) and highlighter, text boxes, rectangles, ovals,
   lines and arrows, highlight/underline/strikeout (also across pages), notes; undo/redo
 - Sign with a saved drawn signature; fill in forms (text, checkboxes, radio buttons, lists)
 - Unsaved changes survive the app being closed (kept as a draft and offered back)
 - Password protection: add, change or remove an AES-256 open password
-- Organize pages: reorder, rotate, duplicate, delete, insert; merge PDFs; extract pages or split
-  into several files
+- Edit pages: reorder, rotate, flip, duplicate, delete, insert; merge PDFs; extract pages or
+  split into several files
 - Reduce file size by recompressing large photos
 - Scan: camera to PDF with automatic page detection and cleanup, into a new or an existing
   document; English OCR makes scans searchable, and can be run on existing scanned PDFs
@@ -40,6 +41,7 @@ Minimum Android version: 8.0 (API 26).
 
 ```
 app/                  home screen, recent files, file picker, "Open with" handling
+core/ui/              small shared Compose pieces (tooltips)
 core/pdf/             Kotlin wrapper around MuPDF: opening, rendering, search, links, outline,
                       rebuilding page lists and safely writing files back
                       (all MuPDF calls run on one dedicated thread)

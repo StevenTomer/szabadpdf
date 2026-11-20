@@ -304,6 +304,12 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     private fun draftKey(uri: Uri): String =
         java.security.MessageDigest.getInstance("SHA-1").digest(uri.toString().toByteArray()).joinToString("") { "%02x".format(it) }
 
+    /** The document showing, if any. */
+    val documentUri: Uri? get() = uri
+
+    /** Whether [uri] has edits that would be lost by closing it: unsaved here, or in a draft. */
+    fun hasUnsavedWork(uri: Uri): Boolean = (this.uri == uri && _annotate.value.dirty) || draftFile(uri).exists()
+
     private fun draftFile(uri: Uri) = java.io.File(getApplication<Application>().filesDir, "drafts/${draftKey(uri)}.pdf")
 
     private fun fingerprintFile(uri: Uri) = java.io.File(getApplication<Application>().filesDir, "drafts/${draftKey(uri)}.fingerprint")

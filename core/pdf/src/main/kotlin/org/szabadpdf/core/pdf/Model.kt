@@ -22,8 +22,17 @@ data class OutlineEntry(val title: String, val depth: Int, val pageIndex: Int)
 sealed interface PageSpec {
     val rotation: Int
 
-    /** Page [index] of [from], or of the document being saved when [from] is null. */
-    data class Existing(val index: Int, val from: PdfDocument? = null, override val rotation: Int = 0) : PageSpec
+    /**
+     * Page [index] of [from], or of the document being saved when [from] is null. [flipH] mirrors
+     * it left to right and [flipV] top to bottom, as the page looks before the extra [rotation].
+     */
+    data class Existing(
+        val index: Int,
+        val from: PdfDocument? = null,
+        override val rotation: Int = 0,
+        val flipH: Boolean = false,
+        val flipV: Boolean = false,
+    ) : PageSpec
 
     data class Blank(val size: PageSize, override val rotation: Int = 0) : PageSpec
 }

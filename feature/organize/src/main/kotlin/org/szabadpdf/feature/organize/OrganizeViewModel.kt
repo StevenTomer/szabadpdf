@@ -25,7 +25,7 @@ import java.io.File
  * One page in the edited document. [source] says where it comes from: [MAIN] (the document
  * being organized), [BLANK], or an inserted document (1, 2, ...). [size] is the page as it
  * currently looks, before the extra [rotation] (clockwise degrees, kept un-wrapped so turning
- * animates the short way).
+ * animates the short way). [flipH] and [flipV] mirror it, as it looks before that rotation.
  */
 data class EditPage(
     val id: Long,
@@ -33,6 +33,8 @@ data class EditPage(
     val index: Int,
     val size: PageSize,
     val rotation: Int = 0,
+    val flipH: Boolean = false,
+    val flipV: Boolean = false,
 ) {
     val displaySize: PageSize
         get() = if (Math.floorMod(rotation, 180) == 90) PageSize(size.height, size.width) else size
@@ -63,8 +65,11 @@ data class OrganizeState(
     val focus: Int? = null,
     /** Waiting for the password of a protected file being inserted. */
     val unlock: UnlockRequest? = null,
+    /** Thumbnail size, an index into [OrganizeViewModel.THUMB_SIZES]. */
+    val thumbSize: Int = OrganizeViewModel.DEFAULT_THUMB_SIZE,
 ) {
     val dirty: Boolean get() = canUndo
+    val allSelected: Boolean get() = pages.isNotEmpty() && selected.size == pages.size
 }
 
 /** A protected file that needs its password before it can be used. */
@@ -78,7 +83,11 @@ sealed interface OrganizeEvent {
 /** Page editing for one document: the edit list, undo history, thumbnails and saving. */
 class OrganizeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _state = MutableStateFlow(OrganizeState())
+    private val prefs = application.getSharedPreferences("organize", android.content.Context.MODE_PRIVATE)
+
+    private fun savedThumbSize() = prefs.getInt(KEY_THUMB_SIZE, DEFAULT_THUMB_SIZE).coerceIn(THUMB_SIZES.indices)
+
+    private val _state = MutableStateFlow(OrganizeState(thumbSize = savedThumbSize()))
     val state: StateFlow<OrganizeState> = _state.asStateFlow()
 
     private val _events = Channel<OrganizeEvent>(Channel.BUFFERED)
@@ -107,7 +116,7 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         discard()
         this.uri = uri
         this.password = password
-        _state.value = OrganizeState(name = name)
+        _state.value = OrganizeState(name = name, thumbSize = savedThumbSize())
         openJob = viewModelScope.launch {
             try {
                 val doc = openDocument(uri, password)
@@ -118,6 +127,7 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
                 main = doc
                 _state.value = OrganizeState(
                     status = OrganizeStatus.Ready,
+                    thumbSize = savedThumbSize(),
                     name = name,
                     pages = doc.pageSizes.mapIndexed { i, size -> EditPage(nextId++, EditPage.MAIN, i, size) },
                     canOverwrite = DocumentFiles.canWrite(getApplication(), uri),
@@ -145,7 +155,14 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         redoStack.clear()
         dragStart = null
         thumbnails.evictAll()
-        _state.value = OrganizeState()
+        _state.value = OrganizeState(thumbSize = savedThumbSize())
+    }
+
+    /** Bigger (+1) or smaller (-1) thumbnails; remembered. */
+    fun zoomThumbnails(step: Int) {
+        val size = (_state.value.thumbSize + step).coerceIn(THUMB_SIZES.indices)
+        prefs.edit().putInt(KEY_THUMB_SIZE, size).apply()
+        _state.update { it.copy(thumbSize = size) }
     }
 
     override fun onCleared() = discard()
@@ -156,7 +173,10 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         it.copy(selected = if (id in it.selected) it.selected - id else it.selected + id)
     }
 
-    fun selectAll() = _state.update { s -> s.copy(selected = s.pages.mapTo(HashSet()) { it.id }) }
+    /** Selects every page, or, when they all are already, none. */
+    fun toggleSelectAll() = _state.update { s ->
+        s.copy(selected = if (s.allSelected) emptySet() else s.pages.mapTo(HashSet()) { it.id })
+    }
 
     fun clearSelection() = _state.update { it.copy(selected = emptySet()) }
 
@@ -193,10 +213,29 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         _state.update { s -> s.copy(selected = copies.toSet(), focus = s.pages.indexOfFirst { it.id == copies.first() }) }
     }
 
-    /** Moves the selected pages, in order, to the start or end. */
-    fun moveSelected(toStart: Boolean) = edit { s ->
-        val (picked, rest) = s.pages.partition { it.id in s.selected }
-        if (toStart) picked + rest else rest + picked
+    /**
+     * Mirrors the selected pages left to right ([horizontal]) or top to bottom, as they're
+     * shown now (so on a page turned a quarter, that's the page's other axis).
+     */
+    fun flipSelected(horizontal: Boolean) = edit { s ->
+        s.pages.map { page ->
+            if (page.id !in s.selected) return@map page
+            val sideways = Math.floorMod(page.rotation, 180) == 90
+            if (horizontal != sideways) page.copy(flipH = !page.flipH) else page.copy(flipV = !page.flipV)
+        }
+    }
+
+    /** Moves each selected page one place earlier ([up]) or later; neighbours swap round it. */
+    fun moveSelected(up: Boolean) = edit { s ->
+        val pages = s.pages.toMutableList()
+        val indices = if (up) 1 until pages.size else (pages.size - 2 downTo 0)
+        for (i in indices) {
+            val j = if (up) i - 1 else i + 1
+            if (pages[i].id in s.selected && pages[j].id !in s.selected) {
+                pages[i] = pages[j].also { pages[j] = pages[i] }
+            }
+        }
+        pages
     }
 
     fun insertBlank() = edit { s ->
@@ -460,12 +499,14 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
                 when (page.source) {
                     EditPage.BLANK -> PageSpec.Blank(page.size, page.rotation)
                     EditPage.MAIN -> if (used.add(page.index)) {
-                        PageSpec.Existing(page.index, rotation = page.rotation)
+                        PageSpec.Existing(page.index, rotation = page.rotation, flipH = page.flipH, flipV = page.flipV)
                     } else {
                         val from = copiesSource ?: openDocument(original, password).also { copiesSource = it }
-                        PageSpec.Existing(page.index, from = from, rotation = page.rotation)
+                        PageSpec.Existing(page.index, from = from, rotation = page.rotation, flipH = page.flipH, flipV = page.flipV)
                     }
-                    else -> PageSpec.Existing(page.index, from = documentFor(page.source), rotation = page.rotation)
+                    else -> PageSpec.Existing(
+                        page.index, from = documentFor(page.source), rotation = page.rotation, flipH = page.flipH, flipV = page.flipV,
+                    )
                 }
             }
             doc.saveRearranged(specs, output)
@@ -488,8 +529,13 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
         return doc
     }
 
-    private companion object {
-        const val HISTORY_LIMIT = 100
-        val A4 = PageSize(595f, 842f)
+    companion object {
+        private const val HISTORY_LIMIT = 100
+        private val A4 = PageSize(595f, 842f)
+        private const val KEY_THUMB_SIZE = "thumb_size"
+
+        /** Thumbnail widths to choose from (dp). */
+        val THUMB_SIZES = listOf(72, 92, 112, 144, 184, 240, 320)
+        const val DEFAULT_THUMB_SIZE = 2
     }
 }

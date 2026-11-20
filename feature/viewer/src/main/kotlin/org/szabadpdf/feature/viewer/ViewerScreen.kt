@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.viewer
 
+import org.szabadpdf.core.ui.Tip
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
@@ -227,6 +228,9 @@ private fun DocumentScreen(
             }
         }
     }
+
+    // Open: the file picker starts in this document's folder.
+    val openHere = rememberLauncherForActivityResult(OpenPdfFrom()) { uri -> uri?.let { tabs?.onOpen?.invoke(it) } }
 
     // Save as / save a copy: the new file then opens (in place of this one) in the viewer.
     val copyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -514,16 +518,24 @@ private fun DocumentScreen(
                 annotate.active -> TopAppBar(
                     title = { Text("Annotate") },
                     navigationIcon = {
-                        IconButton(onClick = { viewModel.setAnnotating(false) }) { Icon(Icons.Filled.Check, "Done annotating") }
+                        Tip("Done annotating") {
+                            IconButton(onClick = { viewModel.setAnnotating(false) }) { Icon(Icons.Filled.Check, "Done annotating") }
+                        }
                     },
                     actions = {
-                        IconButton(onClick = viewModel::undo, enabled = annotate.edits.canUndo) {
-                            Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                        Tip("Undo") {
+                            IconButton(onClick = viewModel::undo, enabled = annotate.edits.canUndo) {
+                                Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                            }
                         }
-                        IconButton(onClick = viewModel::redo, enabled = annotate.edits.canRedo) {
-                            Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                        Tip("Redo") {
+                            IconButton(onClick = viewModel::redo, enabled = annotate.edits.canRedo) {
+                                Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                            }
                         }
-                        IconButton(onClick = { save() }, enabled = annotate.dirty) { Icon(Icons.Filled.Save, "Save") }
+                        Tip("Save") {
+                            IconButton(onClick = { save() }, enabled = annotate.dirty) { Icon(Icons.Filled.Save, "Save") }
+                        }
                     },
                     colors = barColors,
                 )
@@ -531,36 +543,29 @@ private fun DocumentScreen(
                     TopAppBar(
                         title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         navigationIcon = {
-                            IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                            Tip("Back") {
+                                IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                            }
                         },
                         actions = {
-                            if (annotate.dirty) IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") }
-                            IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
+                            if (annotate.dirty) Tip("Save") { IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") } }
+                            Tip("Search") {
+                                IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
+                            }
                             if (annotate.editable) {
-                                IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
+                                Tip("Annotate") {
+                                    IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
+                                }
                             }
                             MoreMenu(
                                 paged = paged,
-                                canOrganize = onOrganize != null && annotate.editable,
                                 canSave = annotate.editable,
                                 onContents = { showOutline = true },
-                                onOrganize = {
-                                    if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
-                                    else onOrganize?.invoke(currentPage)
-                                },
-                                onScanInto = {
-                                    // Like organizing, this rewrites the file: unsaved annotations first.
-                                    if (annotate.dirty) unsavedPrompt = { onScanInto?.invoke(currentPage) ?: Unit } to false
-                                    else onScanInto?.invoke(currentPage)
-                                },
                                 onPaged = ::setPaged,
                                 night = night,
                                 onNight = viewModel::setNight,
                                 thumbnails = showThumbnails,
                                 onThumbnails = viewModel::setThumbnails,
-                                onShare = { share() },
-                                onSaveAs = { copyPicker.launch(info.name) },
-                                onPrint = { print() },
                                 onPassword = { showProtect = true },
                                 onCompress = viewModel::compress,
                                 onRecognize = viewModel::recognizeText,
@@ -575,22 +580,44 @@ private fun DocumentScreen(
             }
         }
 
-        val stripShown = showThumbnails && showChrome && !annotate.active && !searchOpen && selection == null && pageCount > 1
+        val bottomShown = showChrome && !annotate.active && !searchOpen && selection == null
+        val stripShown = showThumbnails && pageCount > 1
         AnimatedVisibility(
-            visible = stripShown,
+            visible = bottomShown,
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            ThumbnailStrip(
-                pageSizes = info.pageSizes,
-                current = currentPage,
-                source = viewModel,
-                versions = versions,
-                night = night,
-                onSelect = { goTo(it) },
-                modifier = Modifier.navigationBarsPadding(),
-            )
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)) {
+                Column(Modifier.navigationBarsPadding()) {
+                    if (stripShown) {
+                        ThumbnailStrip(
+                            pageSizes = info.pageSizes,
+                            current = currentPage,
+                            source = viewModel,
+                            versions = versions,
+                            night = night,
+                            onSelect = { goTo(it) },
+                        )
+                    }
+                    DocumentActions(
+                        canEdit = annotate.editable && onOrganize != null,
+                        onOpen = tabs?.onOpen?.let { { openHere.launch(viewModel.documentUri) } },
+                        onEdit = {
+                            if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
+                            else onOrganize?.invoke(currentPage)
+                        },
+                        onScan = {
+                            // Like editing pages, this rewrites the file: unsaved annotations first.
+                            if (annotate.dirty) unsavedPrompt = { onScanInto?.invoke(currentPage) ?: Unit } to false
+                            else onScanInto?.invoke(currentPage)
+                        },
+                        onSaveAs = { copyPicker.launch(info.name) },
+                        onPrint = { print() },
+                        onShare = { share() },
+                    )
+                }
+            }
         }
 
         AnimatedVisibility(
@@ -625,7 +652,7 @@ private fun DocumentScreen(
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
                 .padding(16.dp)
-                .padding(bottom = if (annotate.active) 64.dp else if (stripShown) 92.dp else 0.dp),
+                .padding(bottom = if (annotate.active) 64.dp else if (bottomShown) (if (stripShown) 92.dp else 0.dp) + 60.dp else 0.dp),
         ) {
             Surface(
                 shape = MaterialTheme.shapes.extraLarge,
@@ -866,7 +893,9 @@ private fun SearchBar(
 
     TopAppBar(
         navigationIcon = {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") }
+            Tip("Close search") {
+                IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Close search") }
+            }
         },
         title = {
             TextField(
@@ -897,11 +926,15 @@ private fun SearchBar(
                 else -> "${state.current + 1}/${state.hits.size}${if (state.running) "+" else ""}"
             }
             Text(label, style = MaterialTheme.typography.labelLarge)
-            IconButton(onClick = onPrevious, enabled = state.hits.isNotEmpty()) {
-                Icon(Icons.Filled.KeyboardArrowUp, "Previous match")
+            Tip("Previous match") {
+                IconButton(onClick = onPrevious, enabled = state.hits.isNotEmpty()) {
+                    Icon(Icons.Filled.KeyboardArrowUp, "Previous match")
+                }
             }
-            IconButton(onClick = onNext, enabled = state.hits.isNotEmpty()) {
-                Icon(Icons.Filled.KeyboardArrowDown, "Next match")
+            Tip("Next match") {
+                IconButton(onClick = onNext, enabled = state.hits.isNotEmpty()) {
+                    Icon(Icons.Filled.KeyboardArrowDown, "Next match")
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(
@@ -1032,4 +1065,16 @@ private fun openExternal(context: android.content.Context, uri: String) {
     } catch (_: ActivityNotFoundException) {
         // Nothing can open it; ignore.
     }
+}
+
+/** Picks a PDF, starting in the folder of the given document (where the picker allows it). */
+private class OpenPdfFrom : androidx.activity.result.contract.ActivityResultContract<Uri?, Uri?>() {
+    override fun createIntent(context: android.content.Context, input: Uri?) =
+        Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("application/pdf")
+            .apply { if (input != null && input.scheme == "content") putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, input) }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
+        intent?.data.takeIf { resultCode == android.app.Activity.RESULT_OK }
 }

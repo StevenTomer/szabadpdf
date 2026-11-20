@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.scan
 
+import org.szabadpdf.core.ui.Tip
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -182,7 +183,9 @@ internal fun CameraScreen(
                 .padding(8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            IconButton(onClick = onClose, colors = overlayButton()) { Icon(Icons.Filled.Close, "Close scanner") }
+            Tip("Close scanner") {
+                IconButton(onClick = onClose, colors = overlayButton()) { Icon(Icons.Filled.Close, "Close scanner") }
+            }
             if (camera?.cameraInfo?.hasFlashUnit() == true) {
                 IconButton(
                     onClick = {
@@ -204,11 +207,13 @@ internal fun CameraScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                colors = overlayButton(),
-                modifier = Modifier.size(56.dp),
-            ) { Icon(Icons.Filled.PhotoLibrary, "Import photos") }
+            Tip("Import photos") {
+                IconButton(
+                    onClick = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    colors = overlayButton(),
+                    modifier = Modifier.size(56.dp),
+                ) { Icon(Icons.Filled.PhotoLibrary, "Import photos") }
+            }
 
             Box(
                 Modifier

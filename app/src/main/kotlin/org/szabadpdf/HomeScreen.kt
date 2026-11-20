@@ -1,5 +1,6 @@
 package org.szabadpdf
 
+import org.szabadpdf.core.ui.Tip
 import android.text.format.DateUtils
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,6 +17,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.MergeType
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -45,35 +53,32 @@ fun HomeScreen(
     onScan: () -> Unit,
     onMerge: () -> Unit,
     onOpenTab: (android.net.Uri) -> Unit,
+    /** Closes a tab; asks first when [hasUnsavedWork] says it has edits that would be lost. */
+    onCloseTab: (android.net.Uri) -> Unit,
+    hasUnsavedWork: (android.net.Uri) -> Boolean,
     onOpenRecent: (RecentFile) -> Unit,
     onRemoveRecent: (RecentFile) -> Unit,
 ) {
+    var closing by remember { mutableStateOf<OpenTab?>(null) }
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("SzabadPDF") },
                 actions = {
-                    TextButton(onClick = onMerge) {
-                        Icon(Icons.Filled.MergeType, contentDescription = null)
-                        Text("Merge PDFs", Modifier.padding(start = 8.dp))
+                    @Composable
+                    fun Action(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit) {
+                        Tip(description) {
+                            TextButton(onClick = onClick, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                Icon(icon, contentDescription = null, Modifier.size(20.dp))
+                                Text(label, Modifier.padding(start = 4.dp))
+                            }
+                        }
                     }
+                    Action("Open", Icons.Filled.FolderOpen, "Open a PDF", onOpenPicker)
+                    Action("Scan", Icons.Filled.DocumentScanner, "Scan paper into a new PDF", onScan)
+                    Action("Merge", Icons.Filled.MergeType, "Merge PDFs into one", onMerge)
                 },
             )
-        },
-        floatingActionButton = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                ExtendedFloatingActionButton(
-                    onClick = onScan,
-                    icon = { Icon(Icons.Filled.DocumentScanner, contentDescription = null) },
-                    text = { Text("Scan") },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                )
-                ExtendedFloatingActionButton(
-                    onClick = onOpenPicker,
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Open PDF") },
-                )
-            }
         },
     ) { padding ->
         if (recents.isEmpty() && openTabs.isEmpty()) {
@@ -96,7 +101,7 @@ fun HomeScreen(
                 }
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 168.dp)) {
+            LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
                 if (openTabs.isNotEmpty()) {
                     item {
                         Text(
@@ -110,6 +115,13 @@ fun HomeScreen(
                         ListItem(
                             headlineContent = { Text(tab.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) },
+                            trailingContent = {
+                                Tip("Close") {
+                                    IconButton(onClick = { if (hasUnsavedWork(tab.uri)) closing = tab else onCloseTab(tab.uri) }) {
+                                        Icon(Icons.Filled.Close, contentDescription = "Close")
+                                    }
+                                }
+                            },
                             modifier = Modifier.clickable { onOpenTab(tab.uri) },
                         )
                     }
@@ -130,8 +142,10 @@ fun HomeScreen(
                             Text("Page ${file.lastPage + 1} · $time")
                         },
                         trailingContent = {
-                            IconButton(onClick = { onRemoveRecent(file) }) {
-                                Icon(Icons.Filled.Close, contentDescription = "Remove from recent")
+                            Tip("Remove from recent") {
+                                IconButton(onClick = { onRemoveRecent(file) }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Remove from recent")
+                                }
                             }
                         },
                         modifier = Modifier.clickable { onOpenRecent(file) },
@@ -139,5 +153,20 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    closing?.let { tab ->
+        AlertDialog(
+            onDismissRequest = { closing = null },
+            title = { Text("Close without saving?") },
+            text = { Text("${tab.name} has changes that haven't been saved. Closing it discards them.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    closing = null
+                    onCloseTab(tab.uri)
+                }) { Text("Discard and close") }
+            },
+            dismissButton = { TextButton(onClick = { closing = null }) { Text("Cancel") } },
+        )
     }
 }

@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.organize
 
+import org.szabadpdf.core.ui.Tip
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -41,8 +42,15 @@ import androidx.compose.material.icons.filled.FileCopy
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.VerticalAlignBottom
-import androidx.compose.material.icons.filled.VerticalAlignTop
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Deselect
+import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.CircularProgressIndicator
@@ -161,9 +169,13 @@ fun OrganizeScreen(
             TopAppBar(
                 navigationIcon = {
                     if (selecting) {
-                        IconButton(onClick = viewModel::clearSelection) { Icon(Icons.Filled.Close, "Clear selection") }
+                        Tip("Clear selection") {
+                            IconButton(onClick = viewModel::clearSelection) { Icon(Icons.Filled.Close, "Clear selection") }
+                        }
                     } else {
-                        IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        Tip("Back") {
+                            IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        }
                     }
                 },
                 title = {
@@ -184,11 +196,15 @@ fun OrganizeScreen(
                 },
                 actions = {
                     val ready = state.status == OrganizeStatus.Ready
-                    IconButton(onClick = viewModel::undo, enabled = ready && state.canUndo) {
-                        Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                    Tip("Undo") {
+                        IconButton(onClick = viewModel::undo, enabled = ready && state.canUndo) {
+                            Icon(Icons.AutoMirrored.Filled.Undo, "Undo")
+                        }
                     }
-                    IconButton(onClick = viewModel::redo, enabled = ready && state.canRedo) {
-                        Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                    Tip("Redo") {
+                        IconButton(onClick = viewModel::redo, enabled = ready && state.canRedo) {
+                            Icon(Icons.AutoMirrored.Filled.Redo, "Redo")
+                        }
                     }
                     AddMenu(
                         enabled = ready,
@@ -197,7 +213,12 @@ fun OrganizeScreen(
                         onScan = onScan,
                     )
                     if (selecting) {
-                        IconButton(onClick = viewModel::selectAll) { Icon(Icons.Filled.SelectAll, "Select all") }
+                        val label = if (state.allSelected) "Unselect all" else "Select all"
+                        Tip(label) {
+                            IconButton(onClick = viewModel::toggleSelectAll) {
+                                Icon(if (state.allSelected) Icons.Filled.Deselect else Icons.Filled.SelectAll, label)
+                            }
+                        }
                     } else {
                         SaveMenu(
                             enabled = ready && state.dirty,
@@ -212,25 +233,30 @@ fun OrganizeScreen(
         },
         bottomBar = {
             if (selecting) {
-                BottomAppBar {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        IconButton(onClick = { viewModel.rotateSelected(-90) }) {
-                            Icon(Icons.AutoMirrored.Filled.RotateLeft, "Rotate left")
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        // Nine actions share the width; each keeps a full-size touch area.
+                        @Composable
+                        fun Action(label: String, icon: ImageVector, iconModifier: Modifier = Modifier, onClick: () -> Unit) {
+                            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                                Tip(label) { IconButton(onClick = onClick) { Icon(icon, label, iconModifier) } }
+                            }
                         }
-                        IconButton(onClick = { viewModel.rotateSelected(90) }) {
-                            Icon(Icons.AutoMirrored.Filled.RotateRight, "Rotate right")
-                        }
-                        IconButton(onClick = { viewModel.moveSelected(toStart = true) }) {
-                            Icon(Icons.Filled.VerticalAlignTop, "Move to start")
-                        }
-                        IconButton(onClick = { viewModel.moveSelected(toStart = false) }) {
-                            Icon(Icons.Filled.VerticalAlignBottom, "Move to end")
-                        }
-                        IconButton(onClick = viewModel::duplicateSelected) { Icon(Icons.Filled.ContentCopy, "Duplicate") }
-                        IconButton(onClick = { extractPicker.launch(extractName(state.name)) }) {
-                            Icon(Icons.Filled.FileCopy, "Save selected pages as a new PDF")
-                        }
-                        IconButton(onClick = viewModel::deleteSelected) { Icon(Icons.Filled.Delete, "Delete") }
+                        Action("Rotate left", Icons.AutoMirrored.Filled.RotateLeft) { viewModel.rotateSelected(-90) }
+                        Action("Rotate right", Icons.AutoMirrored.Filled.RotateRight) { viewModel.rotateSelected(90) }
+                        Action("Flip horizontally", Icons.Filled.Flip) { viewModel.flipSelected(horizontal = true) }
+                        Action("Flip vertically", Icons.Filled.Flip, Modifier.rotate(90f)) { viewModel.flipSelected(horizontal = false) }
+                        Action("Move up", Icons.Filled.ArrowUpward) { viewModel.moveSelected(up = true) }
+                        Action("Move down", Icons.Filled.ArrowDownward) { viewModel.moveSelected(up = false) }
+                        Action("Duplicate", Icons.Filled.FileCopy, onClick = viewModel::duplicateSelected)
+                        Action("Save selected pages as a new PDF", Icons.Filled.Save) { extractPicker.launch(extractName(state.name)) }
+                        Action("Delete", Icons.Filled.Delete, onClick = viewModel::deleteSelected)
                     }
                 }
             }
@@ -274,16 +300,26 @@ fun OrganizeScreen(
     if (confirmDiscard) {
         AlertDialog(
             onDismissRequest = { confirmDiscard = false },
-            title = { Text("Discard changes?") },
+            title = { Text("Save your changes?") },
             text = { Text("Your page changes haven't been saved.") },
             confirmButton = {
-                TextButton(onClick = {
-                    confirmDiscard = false
-                    onClose()
-                }) { Text("Discard") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+                Column(horizontalAlignment = Alignment.End) {
+                    if (state.canOverwrite) {
+                        TextButton(onClick = {
+                            confirmDiscard = false
+                            viewModel.save()
+                        }) { Text("Save (overwrite)") }
+                    }
+                    TextButton(onClick = {
+                        confirmDiscard = false
+                        saveCopy()
+                    }) { Text("Save as new PDF…") }
+                    TextButton(onClick = {
+                        confirmDiscard = false
+                        onClose()
+                    }) { Text("Discard changes") }
+                    TextButton(onClick = { confirmDiscard = false }) { Text("Keep editing") }
+                }
             },
         )
     }
@@ -325,12 +361,13 @@ private fun PageGrid(
         }
     }
 
+    Box(Modifier.fillMaxSize()) {
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(112.dp),
+        columns = GridCells.Adaptive(OrganizeViewModel.THUMB_SIZES[state.thumbSize].dp),
         state = grid,
         contentPadding = PaddingValues(
             top = contentPadding.calculateTopPadding() + 4.dp,
-            bottom = contentPadding.calculateBottomPadding() + 16.dp,
+            bottom = contentPadding.calculateBottomPadding() + 88.dp, // clear of the size buttons
         ),
         modifier = Modifier
             .fillMaxSize()
@@ -370,6 +407,36 @@ private fun PageGrid(
             )
         }
     }
+        ThumbnailSizeControl(
+            canShrink = state.thumbSize > 0,
+            canGrow = state.thumbSize < OrganizeViewModel.THUMB_SIZES.lastIndex,
+            onZoom = viewModel::zoomThumbnails,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(bottom = contentPadding.calculateBottomPadding())
+                .padding(16.dp),
+        )
+    }
+}
+
+/** Smaller / bigger thumbnails. */
+@Composable
+private fun ThumbnailSizeControl(canShrink: Boolean, canGrow: Boolean, onZoom: (Int) -> Unit, modifier: Modifier) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shadowElevation = 4.dp,
+        modifier = modifier,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Tip("Smaller thumbnails") {
+                IconButton(onClick = { onZoom(-1) }, enabled = canShrink) { Icon(Icons.Filled.ZoomOut, "Smaller thumbnails") }
+            }
+            Tip("Bigger thumbnails") {
+                IconButton(onClick = { onZoom(1) }, enabled = canGrow) { Icon(Icons.Filled.ZoomIn, "Bigger thumbnails") }
+            }
+        }
+    }
 }
 
 @Composable
@@ -404,7 +471,12 @@ private fun PageCell(
             Box(
                 Modifier
                     .requiredSize(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
-                    .graphicsLayer { rotationZ = angle }
+                    .graphicsLayer {
+                        rotationZ = angle
+                        // Scaling applies before the turn, so these mirror the page as it is unturned.
+                        scaleX = if (page.flipH) -1f else 1f
+                        scaleY = if (page.flipV) -1f else 1f
+                    }
                     .shadow(if (lifted) 10.dp else 1.dp)
                     .background(Color.White)
                     .border(if (selected) 3.dp else 1.dp, outline),
@@ -436,7 +508,9 @@ private fun PageCell(
 private fun AddMenu(enabled: Boolean, onBlank: () -> Unit, onFromPdf: () -> Unit, onScan: (() -> Unit)?) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { open = true }, enabled = enabled) { Icon(Icons.Filled.Add, "Add pages") }
+        Tip("Add pages") {
+            IconButton(onClick = { open = true }, enabled = enabled) { Icon(Icons.Filled.Add, "Add pages") }
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Blank page") }, onClick = {
                 open = false
@@ -460,10 +534,12 @@ private fun AddMenu(enabled: Boolean, onBlank: () -> Unit, onFromPdf: () -> Unit
 private fun SaveMenu(enabled: Boolean, canOverwrite: Boolean, onSave: () -> Unit, onSaveCopy: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(
-            onClick = { if (canOverwrite) open = true else onSaveCopy() },
-            enabled = enabled,
-        ) { Icon(Icons.Filled.Save, "Save") }
+        Tip("Save") {
+            IconButton(
+                onClick = { if (canOverwrite) open = true else onSaveCopy() },
+                enabled = enabled,
+            ) { Icon(Icons.Filled.Save, "Save") }
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Save") }, onClick = {
                 open = false
@@ -509,7 +585,9 @@ private fun copyName(name: String): String {
 private fun OrganizeMoreMenu(enabled: Boolean, onSplit: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+        Tip("More options") {
+            IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(text = { Text("Split into files…") }, enabled = enabled, onClick = {
                 open = false

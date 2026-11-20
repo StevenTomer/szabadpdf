@@ -118,20 +118,23 @@ private fun App(
         home = false
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            // Keep access across restarts so the file can be reopened from Recent and its tab.
-            // Write access too where the provider allows it, so edits can be saved in place.
-            val resolver = context.contentResolver
-            runCatching {
-                resolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            }.recoverCatching {
-                resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            show(uri)
+    /** Shows a document the user just picked. */
+    fun showPicked(uri: Uri) {
+        // Keep access across restarts so the file can be reopened from Recent and its tab.
+        // Write access too where the provider allows it, so edits can be saved in place.
+        val resolver = context.contentResolver
+        runCatching {
+            resolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }.recoverCatching {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        show(uri)
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(::showPicked)
     }
 
     LaunchedEffect(incoming) {
@@ -212,6 +215,8 @@ private fun App(
             onScan = { scanning = true },
             onMerge = { mergePicker.launch(arrayOf("application/pdf")) },
             onOpenTab = { show(it) },
+            onCloseTab = ::closeTab,
+            hasUnsavedWork = { viewerFor(it).hasUnsavedWork(it) },
             onOpenRecent = { show(it.uri) },
             onRemoveRecent = { recents.remove(it.uri, releaseAccess = it.uri !in tabs) },
         )
@@ -275,6 +280,8 @@ private fun App(
                     onSelect = { id -> openTabs.select(Uri.parse(id)) },
                     onClose = { closeTab(current) },
                     onNew = { home = true },
+                    onOpen = ::showPicked,
+                    onMove = openTabs::move,
                 ),
             )
         }

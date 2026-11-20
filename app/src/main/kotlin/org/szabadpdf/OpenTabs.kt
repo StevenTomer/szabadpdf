@@ -44,6 +44,14 @@ class OpenTabs(context: Context) {
         save(rest, next)
     }
 
+    /** Moves the tab at position [from] to position [to]. */
+    fun move(from: Int, to: Int) {
+        val list = _tabs.value.toMutableList()
+        if (from !in list.indices || to !in list.indices || from == to) return
+        list.add(to, list.removeAt(from))
+        save(list, _active.value)
+    }
+
     /** Puts [new] in [old]'s place (e.g. after "save as"). */
     fun replace(old: Uri, new: Uri) {
         val list = _tabs.value.filter { it != new }.map { if (it == old) new else it }

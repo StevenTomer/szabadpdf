@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.viewer
 
+import org.szabadpdf.core.ui.Tip
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -110,7 +111,9 @@ internal fun AnnotateToolbar(
             ToolButton(Tool.SHAPE, shapeIcon(state.shape), "Shape", state.tool, onTool, accent = state.pen.color)
             ToolButton(Tool.SIGNATURE, Icons.Filled.Gesture, "Signature", state.tool, onTool)
             ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
-            IconButton(onClick = onStyle) { Icon(Icons.Filled.Palette, "Pen settings") }
+            Tip("Pen settings") {
+                IconButton(onClick = onStyle) { Icon(Icons.Filled.Palette, "Pen settings") }
+            }
         }
     }
 }
@@ -125,6 +128,11 @@ private fun ToolButton(
     accent: Int? = null,
 ) {
     val active = tool == selected
+    Tip(label) { ToolButtonBody(tool, icon, label, active, onTool, accent) }
+}
+
+@Composable
+private fun ToolButtonBody(tool: Tool, icon: ImageVector, label: String, active: Boolean, onTool: (Tool) -> Unit, accent: Int?) {
     Box(
         Modifier
             .size(48.dp)
@@ -291,14 +299,22 @@ internal fun SelectionBar(
     onClose: () -> Unit,
 ) {
     TopAppBar(
-        navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Clear selection") } },
+        navigationIcon = { Tip("Clear selection") { IconButton(onClick = onClose) { Icon(Icons.Filled.Close, "Clear selection") } } },
         title = { Text("Text") },
         actions = {
-            IconButton(onClick = onCopy) { Icon(Icons.Filled.ContentCopy, "Copy") }
+            Tip("Copy") {
+                IconButton(onClick = onCopy) { Icon(Icons.Filled.ContentCopy, "Copy") }
+            }
             if (canMark) {
-                IconButton(onClick = onHighlight) { Icon(Icons.Filled.BorderColor, "Highlight") }
-                IconButton(onClick = onUnderline) { Icon(Icons.Filled.FormatUnderlined, "Underline") }
-                IconButton(onClick = onStrikeout) { Icon(Icons.Filled.FormatStrikethrough, "Strike out") }
+                Tip("Highlight") {
+                    IconButton(onClick = onHighlight) { Icon(Icons.Filled.BorderColor, "Highlight") }
+                }
+                Tip("Underline") {
+                    IconButton(onClick = onUnderline) { Icon(Icons.Filled.FormatUnderlined, "Underline") }
+                }
+                Tip("Strike out") {
+                    IconButton(onClick = onStrikeout) { Icon(Icons.Filled.FormatStrikethrough, "Strike out") }
+                }
             }
         },
         colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),

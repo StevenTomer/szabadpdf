@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.scan
 
+import org.szabadpdf.core.ui.Tip
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.PointF
@@ -82,10 +83,12 @@ internal fun ReviewScreen(
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
         TopAppBar(
-            navigationIcon = { IconButton(onClick = onAddMore) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to camera") } },
+            navigationIcon = { Tip("Back to camera") { IconButton(onClick = onAddMore) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to camera") } } },
             title = { Text(if (pages.size == 1) "1 page" else "${pages.size} pages") },
             actions = {
-                IconButton(onClick = onAddMore) { Icon(Icons.Filled.AddAPhoto, "Scan more pages") }
+                Tip("Scan more pages") {
+                    IconButton(onClick = onAddMore) { Icon(Icons.Filled.AddAPhoto, "Scan more pages") }
+                }
                 TextButton(onClick = onSave, enabled = pages.isNotEmpty() && state.processing == 0) { Text(saveLabel) }
             },
         )
@@ -126,21 +129,31 @@ internal fun ReviewScreen(
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 val enabled = current != null
-                IconButton(onClick = { current?.let { viewModel.move(it.id, -1) } }, enabled = enabled && pager.currentPage > 0) {
-                    Icon(Icons.Filled.ChevronLeft, "Move page earlier")
+                Tip("Move page earlier") {
+                    IconButton(onClick = { current?.let { viewModel.move(it.id, -1) } }, enabled = enabled && pager.currentPage > 0) {
+                        Icon(Icons.Filled.ChevronLeft, "Move page earlier")
+                    }
                 }
-                IconButton(onClick = { cropping = current }, enabled = enabled) { Icon(Icons.Filled.Crop, "Crop") }
-                IconButton(onClick = { current?.let { viewModel.rotate(it.id) } }, enabled = enabled) {
-                    Icon(Icons.AutoMirrored.Filled.RotateRight, "Rotate")
+                Tip("Crop") {
+                    IconButton(onClick = { cropping = current }, enabled = enabled) { Icon(Icons.Filled.Crop, "Crop") }
+                }
+                Tip("Rotate") {
+                    IconButton(onClick = { current?.let { viewModel.rotate(it.id) } }, enabled = enabled) {
+                        Icon(Icons.AutoMirrored.Filled.RotateRight, "Rotate")
+                    }
                 }
                 ColorMenu(current, viewModel)
-                IconButton(onClick = { current?.let { viewModel.delete(it.id) } }, enabled = enabled) {
-                    Icon(Icons.Filled.Delete, "Delete page")
+                Tip("Delete page") {
+                    IconButton(onClick = { current?.let { viewModel.delete(it.id) } }, enabled = enabled) {
+                        Icon(Icons.Filled.Delete, "Delete page")
+                    }
                 }
-                IconButton(
-                    onClick = { current?.let { viewModel.move(it.id, 1) } },
-                    enabled = enabled && pager.currentPage < pages.size - 1,
-                ) { Icon(Icons.Filled.ChevronRight, "Move page later") }
+                Tip("Move page later") {
+                    IconButton(
+                        onClick = { current?.let { viewModel.move(it.id, 1) } },
+                        enabled = enabled && pager.currentPage < pages.size - 1,
+                    ) { Icon(Icons.Filled.ChevronRight, "Move page later") }
+                }
             }
         }
     }
@@ -161,7 +174,9 @@ internal fun ReviewScreen(
 private fun ColorMenu(page: ScanPage?, viewModel: ScanViewModel) {
     var open by remember { mutableStateOf(false) }
     Box {
-        IconButton(onClick = { open = true }, enabled = page != null) { Icon(Icons.Filled.Palette, "Colour") }
+        Tip("Colour") {
+            IconButton(onClick = { open = true }, enabled = page != null) { Icon(Icons.Filled.Palette, "Colour") }
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             for ((color, label) in listOf(
                 ScanColor.COLOR to "Colour",
@@ -191,7 +206,7 @@ private fun CropEditor(page: ScanPage, onApply: (Corners) -> Unit, onCancel: () 
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         TopAppBar(
-            navigationIcon = { IconButton(onClick = onCancel) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Cancel") } },
+            navigationIcon = { Tip("Cancel") { IconButton(onClick = onCancel) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Cancel") } } },
             title = { Text("Crop") },
             actions = {
                 TextButton(onClick = { corners = Corners.WHOLE_IMAGE.points }) { Text("Whole photo") }

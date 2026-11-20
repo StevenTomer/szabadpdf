@@ -1,5 +1,6 @@
 package org.szabadpdf.feature.viewer
 
+import org.szabadpdf.core.ui.Tip
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Compress
 import androidx.compose.material.icons.filled.TextFields
@@ -56,6 +58,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.key
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.io.File
@@ -74,12 +82,20 @@ class TabsUi(
     val onClose: () -> Unit,
     /** Opens another document. */
     val onNew: () -> Unit,
+    /** Opens [Uri] (picked with the viewer's Open button) in a tab. */
+    val onOpen: ((android.net.Uri) -> Unit)? = null,
+    /** Moves the tab [from] one position to [to]. */
+    val onMove: ((from: Int, to: Int) -> Unit)? = null,
 )
 
 internal val TabStripHeight = 44.dp
 
 @Composable
 internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
+    val drag = remember { TabDrag() }
+    val widths = remember { mutableMapOf<String, Int>() }
+    val spacing = with(androidx.compose.ui.platform.LocalDensity.current) { 6.dp.toPx() }
+    val currentTabs by androidx.compose.runtime.rememberUpdatedState(tabs.tabs)
     Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)) {
         Row(
             Modifier
@@ -95,13 +111,23 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                for (tab in tabs.tabs) {
+                for ((index, tab) in tabs.tabs.withIndex()) key(tab.id) {
                     val active = tab.id == tabs.active
+                    val dragged = drag.id == tab.id
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = if (active) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
                         contentColor = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        shadowElevation = if (dragged) 6.dp else 0.dp,
                         modifier = Modifier
+                            .onSizeChanged { widths[tab.id] = it.width }
+                            .zIndex(if (dragged) 1f else 0f)
+                            .graphicsLayer { translationX = if (dragged) drag.offset else 0f }
+                            .then(
+                                if (tabs.onMove != null && tabs.tabs.size > 1) {
+                                    Modifier.pointerInput(tab.id) { reorderTabs(tab.id, drag, widths, spacing, { currentTabs }, tabs.onMove) }
+                                } else Modifier,
+                            )
                             .clip(RoundedCornerShape(10.dp))
                             .clickable(enabled = !active, onClickLabel = "Switch to ${tab.title}") { tabs.onSelect(tab.id) },
                     ) {
@@ -116,36 +142,34 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
                                     .padding(vertical = 8.dp),
                             )
                             if (active) {
-                                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Filled.Close, "Close tab", Modifier.size(18.dp))
+                                Tip("Close tab") {
+                                    IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Filled.Close, "Close tab", Modifier.size(18.dp))
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            IconButton(onClick = tabs.onNew) { Icon(Icons.Filled.Add, "Open another document") }
+            Tip("Open another document") {
+                IconButton(onClick = tabs.onNew) { Icon(Icons.Filled.Add, "Open another document") }
+            }
         }
     }
 }
 
-/** The ⋮ menu: contents, organizing, view mode, share, save as, print. */
+/** The ⋮ menu: contents, view options, and less common document tools. */
 @Composable
 internal fun MoreMenu(
     paged: Boolean,
-    canOrganize: Boolean,
     canSave: Boolean,
     onContents: () -> Unit,
-    onOrganize: () -> Unit,
-    onScanInto: () -> Unit,
     onPaged: (Boolean) -> Unit,
     night: Boolean,
     onNight: (Boolean) -> Unit,
     thumbnails: Boolean,
     onThumbnails: (Boolean) -> Unit,
-    onShare: () -> Unit,
-    onSaveAs: () -> Unit,
-    onPrint: () -> Unit,
     onPassword: () -> Unit,
     onCompress: () -> Unit,
     onRecognize: () -> Unit,
@@ -156,25 +180,15 @@ internal fun MoreMenu(
         action()
     }
     Box {
-        IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+        Tip("More options") {
+            IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+        }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text("Contents") },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) },
                 onClick = pick(onContents),
             )
-            if (canOrganize) {
-                DropdownMenuItem(
-                    text = { Text("Organize pages") },
-                    leadingIcon = { Icon(Icons.Filled.GridView, null) },
-                    onClick = pick(onOrganize),
-                )
-                DropdownMenuItem(
-                    text = { Text("Scan pages into this document") },
-                    leadingIcon = { Icon(Icons.Filled.DocumentScanner, null) },
-                    onClick = pick(onScanInto),
-                )
-            }
             DropdownMenuItem(
                 text = { Text("Scroll continuously") },
                 leadingIcon = { Icon(Icons.Filled.ViewDay, null) },
@@ -193,20 +207,8 @@ internal fun MoreMenu(
                 trailingIcon = { Checkbox(checked = thumbnails, onCheckedChange = null) },
                 onClick = pick { onThumbnails(!thumbnails) },
             )
-            HorizontalDivider()
-            DropdownMenuItem(
-                text = { Text("Share") },
-                leadingIcon = { Icon(Icons.Filled.Share, null) },
-                onClick = pick(onShare),
-            )
             if (canSave) {
-                DropdownMenuItem(
-                    text = { Text("Save as…") },
-                    leadingIcon = { Icon(Icons.Filled.SaveAs, null) },
-                    onClick = pick(onSaveAs),
-                )
-            }
-            if (canSave) {
+                HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text("Recognize text (OCR)") },
                     leadingIcon = { Icon(Icons.Filled.TextFields, null) },
@@ -223,11 +225,6 @@ internal fun MoreMenu(
                     onClick = pick(onPassword),
                 )
             }
-            DropdownMenuItem(
-                text = { Text("Print") },
-                leadingIcon = { Icon(Icons.Filled.Print, null) },
-                onClick = pick(onPrint),
-            )
         }
     }
 }
@@ -332,3 +329,96 @@ internal fun ThumbnailStrip(
 }
 
 internal val ThumbWidth = 48.dp
+
+/** One of the document actions along the bottom: an icon with a short label under it. */
+private class DocAction(val label: String, val description: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
+
+/** The main things to do with a document, one tap away: open, edit pages, scan, save as, print, share. */
+@Composable
+internal fun DocumentActions(
+    canEdit: Boolean,
+    onOpen: (() -> Unit)?,
+    onEdit: () -> Unit,
+    onScan: () -> Unit,
+    onSaveAs: () -> Unit,
+    onPrint: () -> Unit,
+    onShare: () -> Unit,
+) {
+    val actions = buildList {
+        if (onOpen != null) add(DocAction("Open", "Open a PDF from this folder", Icons.Filled.FolderOpen, onOpen))
+        if (canEdit) {
+            add(DocAction("Edit", "Edit pages: reorder, rotate, delete, insert…", Icons.Filled.GridView, onEdit))
+            add(DocAction("Scan", "Scan pages into this document", Icons.Filled.DocumentScanner, onScan))
+            add(DocAction("Save as", "Save as…", Icons.Filled.SaveAs, onSaveAs))
+        }
+        add(DocAction("Print", "Print", Icons.Filled.Print, onPrint))
+        add(DocAction("Share", "Share", Icons.Filled.Share, onShare))
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        for (action in actions) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                Tip(action.description) {
+                    androidx.compose.foundation.layout.Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClickLabel = action.description, onClick = action.onClick)
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    ) {
+                        Icon(action.icon, contentDescription = null)
+                        Text(action.label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** The tab being dragged to a new place, and how far it is from its slot. */
+private class TabDrag {
+    var id by mutableStateOf<String?>(null)
+    var offset by androidx.compose.runtime.mutableFloatStateOf(0f)
+}
+
+/**
+ * Hold a tab, then drag it sideways: once it's passed the middle of its neighbour, the two
+ * swap places.
+ */
+private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.reorderTabs(
+    id: String,
+    drag: TabDrag,
+    widths: Map<String, Int>,
+    spacing: Float,
+    tabs: () -> List<DocumentTab>,
+    onMove: (Int, Int) -> Unit,
+) {
+    detectDragGesturesAfterLongPress(
+        onDragStart = {
+            drag.id = id
+            drag.offset = 0f
+        },
+        onDragEnd = { drag.id = null },
+        onDragCancel = { drag.id = null },
+        onDrag = { change, amount ->
+            change.consume()
+            drag.offset += amount.x
+            val list = tabs()
+            val index = list.indexOfFirst { it.id == id }
+            val next = list.getOrNull(index + 1)
+            val previous = list.getOrNull(index - 1)
+            if (drag.offset > 0 && next != null) {
+                val step = (widths[next.id] ?: return@detectDragGesturesAfterLongPress) + spacing
+                if (drag.offset > step / 2) {
+                    onMove(index, index + 1)
+                    drag.offset -= step
+                }
+            } else if (drag.offset < 0 && previous != null) {
+                val step = (widths[previous.id] ?: return@detectDragGesturesAfterLongPress) + spacing
+                if (-drag.offset > step / 2) {
+                    onMove(index, index - 1)
+                    drag.offset += step
+                }
+            }
+        },
+    )
+}

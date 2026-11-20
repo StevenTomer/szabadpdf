@@ -61,6 +61,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core:ui"))
     implementation(project(":core:pdf"))
     implementation(project(":feature:viewer"))
     implementation(project(":feature:organize"))

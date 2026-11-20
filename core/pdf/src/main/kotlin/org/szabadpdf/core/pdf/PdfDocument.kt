@@ -196,6 +196,7 @@ class PdfDocument private constructor(
             pdf.rearrangePages(order)
 
             pages.forEachIndexed { i, spec ->
+                if (spec is PageSpec.Existing && (spec.flipH || spec.flipV)) flip(pdf, pdf.findPage(i), spec.flipH, spec.flipV)
                 if (spec.rotation % 360 == 0) return@forEachIndexed
                 val page = pdf.findPage(i)
                 val current = page.getInheritable("Rotate").let { if (it.isNull) 0 else it.asInteger() }
@@ -212,6 +213,66 @@ class PdfDocument private constructor(
         }
 
         verifySaved(target, pages.size)
+    }
+
+    /**
+     * Mirrors [page] (left to right when [horizontal], top to bottom when [vertical], as it
+     * looks with its own rotation): its content, and its annotations' positions and appearances.
+     */
+    private fun flip(pdf: PDFDocument, page: PDFObject, horizontal: Boolean, vertical: Boolean) {
+        // Flips are in the page's own coordinates, which a quarter turn swaps.
+        val rotate = page.getInheritable("Rotate").let { if (it.isNull) 0 else Math.floorMod(it.asInteger(), 360) }
+        val (h, v) = if (rotate % 180 == 90) vertical to horizontal else horizontal to vertical
+        val box = page.getInheritable("CropBox").takeIf { it.size() == 4 } ?: page.getInheritable("MediaBox")
+        if (box.size() != 4) return
+        val xs = listOf(box.get(0).asFloat(), box.get(2).asFloat())
+        val ys = listOf(box.get(1).asFloat(), box.get(3).asFloat())
+        val m = mirror(h, v, xs.min() + xs.max(), ys.min() + ys.max())
+
+        val contents = page.get("Contents")
+        if (!contents.isNull) {
+            val all = pdf.newArray()
+            all.push(pdf.addStream("q ${m.joinToString(" ") { fmt(it) }} cm\n"))
+            if (contents.size() > 0 && contents.isArray) for (i in 0 until contents.size()) all.push(contents.get(i))
+            else all.push(contents)
+            all.push(pdf.addStream("\nQ\n"))
+            page.put("Contents", all)
+        }
+
+        val annots = page.get("Annots")
+        for (i in 0 until annots.size()) {
+            val annot = annots.get(i)
+            if (annot.isNull) continue
+            annot.get("Rect").let { if (it.size() == 4) annot.put("Rect", boxArray(pdf, transformBox(floats(it), m))) }
+            for (key in listOf("QuadPoints", "L", "Vertices", "CL")) {
+                annot.get(key).let { if (it.size() >= 2) annot.put(key, pointArray(pdf, floats(it), m)) }
+            }
+            annot.get("InkList").let { ink ->
+                if (ink.size() == 0) return@let
+                val strokes = pdf.newArray()
+                for (s in 0 until ink.size()) strokes.push(pointArray(pdf, floats(ink.get(s)), m))
+                annot.put("InkList", strokes)
+            }
+            val ap = annot.get("AP")
+            for (key in listOf("N", "R", "D")) {
+                val look = ap.get(key)
+                if (look.isNull) continue
+                if (look.isStream) flipAppearance(pdf, look, h, v)
+                else for (state in look) look.get(state).takeIf { it.isStream }?.let { flipAppearance(pdf, it, h, v) }
+            }
+        }
+    }
+
+    /**
+     * Mirrors an annotation appearance in place, about the middle of where it's drawn, so that
+     * once fitted into the mirrored Rect it lands mirrored like the page.
+     */
+    private fun flipAppearance(pdf: PDFDocument, form: PDFObject, h: Boolean, v: Boolean) {
+        val bbox = form.get("BBox").takeIf { it.size() == 4 }?.let(::floats) ?: return
+        val matrix = form.get("Matrix").takeIf { it.size() == 6 }?.let(::floats) ?: floatArrayOf(1f, 0f, 0f, 1f, 0f, 0f)
+        val shown = transformBox(bbox, matrix)
+        val g = mirror(h, v, shown[0] + shown[2], shown[1] + shown[3])
+        form.put("Matrix", pdf.newArray().also { a -> concat(matrix, g).forEach { a.push(it) } })
     }
 
     // --- text selection ---------------------------------------------------------------------
@@ -999,3 +1060,36 @@ class PdfDocument private constructor(
         }
     }
 }
+
+/** [a b c d e f] mirroring about x = sumX / 2 and/or y = sumY / 2. */
+private fun mirror(h: Boolean, v: Boolean, sumX: Float, sumY: Float) =
+    floatArrayOf(if (h) -1f else 1f, 0f, 0f, if (v) -1f else 1f, if (h) sumX else 0f, if (v) sumY else 0f)
+
+/** First [m], then [n] (PDF's row-vector order). */
+private fun concat(m: FloatArray, n: FloatArray) = floatArrayOf(
+    m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3],
+    m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3],
+    m[4] * n[0] + m[5] * n[2] + n[4], m[4] * n[1] + m[5] * n[3] + n[5],
+)
+
+private fun floats(array: PDFObject) = FloatArray(array.size()) { array.get(it).asFloat() }
+
+private fun transformPoint(x: Float, y: Float, m: FloatArray) = (x * m[0] + y * m[2] + m[4]) to (x * m[1] + y * m[3] + m[5])
+
+/** The box around [box] (x0 y0 x1 y1) once transformed by [m]. */
+private fun transformBox(box: FloatArray, m: FloatArray): FloatArray {
+    val corners = listOf(box[0] to box[1], box[2] to box[1], box[0] to box[3], box[2] to box[3]).map { transformPoint(it.first, it.second, m) }
+    return floatArrayOf(corners.minOf { it.first }, corners.minOf { it.second }, corners.maxOf { it.first }, corners.maxOf { it.second })
+}
+
+private fun boxArray(pdf: PDFDocument, box: FloatArray) = pdf.newArray().also { a -> box.forEach { a.push(it) } }
+
+private fun pointArray(pdf: PDFDocument, xy: FloatArray, m: FloatArray) = pdf.newArray().also { a ->
+    for (i in 0 until xy.size / 2) {
+        val (x, y) = transformPoint(xy[2 * i], xy[2 * i + 1], m)
+        a.push(x)
+        a.push(y)
+    }
+}
+
+private fun fmt(f: Float): String = if (f == f.toInt().toFloat()) f.toInt().toString() else "%.4f".format(java.util.Locale.ROOT, f)
