@@ -27,7 +27,11 @@ import org.szabadpdf.feature.scan.ScanScreen
 import org.szabadpdf.feature.scan.ScanViewModel
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import org.szabadpdf.feature.viewer.DocumentTab
 import org.szabadpdf.feature.viewer.TabsUi
@@ -135,6 +139,17 @@ private fun App(
             show(it)
             onIncomingHandled()
         }
+    }
+
+    // Going to the background is when Android may close the app: keep unsaved edits as drafts.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val currentTabs by rememberUpdatedState(tabs)
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) currentTabs.forEach { viewerFor(it).saveDraft() }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
 
     fun nameOf(uri: Uri) = recentItems.firstOrNull { it.uri == uri }?.name ?: uri.lastPathSegment ?: "Document"

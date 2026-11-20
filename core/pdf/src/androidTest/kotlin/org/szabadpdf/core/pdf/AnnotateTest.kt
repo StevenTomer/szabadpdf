@@ -145,4 +145,33 @@ class AnnotateTest {
         val x = ((word.rects[0].left + word.rects[0].right) / 2).toInt()
         assertNotEquals(Color.WHITE, result.renderPage(2, 612).getPixel(x, y))
     }
+
+    @Test
+    fun draftsKeepUnsavedEdits() = runBlocking {
+        val draft = File(context.cacheDir, "draft.pdf").apply { delete() }
+        val before = DocumentFiles.fingerprint(context, Uri.fromFile(file))
+        doc.saveDraft(draft)
+        assertFalse("no draft without edits", draft.exists())
+
+        doc.addInk(0, listOf(PdfPoint(100f, 300f), PdfPoint(200f, 320f)), InkStyle(0x0000FF, 2f))
+        doc.addNote(0, PdfPoint(400f, 100f), "remember me")
+        assertTrue(doc.hasUnsavedChanges())
+        doc.saveDraft(draft)
+        doc.close()
+
+        // As if the app had been closed: the file itself is unchanged...
+        assertEquals(before, DocumentFiles.fingerprint(context, Uri.fromFile(file)))
+        // ...and the draft has the edits.
+        doc = PdfDocument.open(context, Uri.fromFile(draft))
+        assertEquals("remember me", doc.annotationAt(0, PdfPoint(410f, 110f))?.contents)
+        assertEquals(1, doc.annotations(0).count { it.kind == AnnotationKind.INK })
+        assertFalse(doc.hasUnsavedChanges())
+
+        // Saving from the draft gives the original file the edits.
+        doc.saveTo(context, Uri.fromFile(file))
+        doc.close()
+        assertNotEquals(before, DocumentFiles.fingerprint(context, Uri.fromFile(file)))
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        assertEquals("remember me", doc.annotationAt(0, PdfPoint(410f, 110f))?.contents)
+    }
 }

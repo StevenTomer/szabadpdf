@@ -31,6 +31,35 @@ object DocumentFiles {
     }
 
     /**
+     * A cheap fingerprint of [uri]'s contents (its size and a hash of its first and last 64 KB),
+     * for noticing that a file has changed. PDF edits are appended to the end, so they change it.
+     */
+    suspend fun fingerprint(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching null
+            pfd.use {
+                FileInputStream(it.fileDescriptor).channel.use { channel ->
+                    val size = channel.size()
+                    digest.update(size.toString().toByteArray())
+                    fun hash(at: Long) {
+                        val buffer = java.nio.ByteBuffer.allocate(minOf(CHUNK, size - at).toInt())
+                        channel.position(at)
+                        while (buffer.hasRemaining() && channel.read(buffer) > 0) Unit
+                        buffer.flip()
+                        digest.update(buffer)
+                    }
+                    hash(0)
+                    if (size > CHUNK) hash(size - CHUNK)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }.getOrNull()
+    }
+
+    private const val CHUNK = 64L * 1024
+
+    /**
      * Replaces the contents of [uri] with [file]. The current contents are backed up first and
      * put back if writing fails part-way, so the original is never left half-written.
      */

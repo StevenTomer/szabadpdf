@@ -611,6 +611,7 @@ private fun DocumentScreen(
             onDiscard = if (canDiscard) {
                 {
                     unsavedPrompt = null
+                    viewModel.discardChanges()
                     then()
                 }
             } else null,

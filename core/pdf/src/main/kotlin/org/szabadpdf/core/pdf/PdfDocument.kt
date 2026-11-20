@@ -335,6 +335,27 @@ class PdfDocument private constructor(
         }
     }
 
+    /** Whether there are edits not yet written to the file. */
+    suspend fun hasUnsavedChanges(): Boolean = onEngine { (doc as? PDFDocument)?.hasUnsavedChanges() == true }
+
+    /**
+     * Writes the document with its unsaved edits to [file], a private draft that survives the
+     * app being closed (see [DocumentFiles.fingerprint] for telling whether it still fits the
+     * original). Removes [file] when there's nothing unsaved. The document itself is unchanged.
+     */
+    suspend fun saveDraft(file: File) = onEngine {
+        val pdf = doc as? PDFDocument
+        if (pdf == null || !pdf.hasUnsavedChanges()) {
+            file.delete()
+            return@onEngine
+        }
+        file.parentFile?.mkdirs()
+        val partial = File(file.parentFile, file.name + ".part")
+        pdf.save(partial.path, if (pdf.canBeSavedIncrementally()) "incremental" else "garbage=compact,compress")
+        verifySaved(partial, bounds.size)
+        if (!partial.renameTo(file)) throw java.io.IOException("Couldn't store the draft")
+    }
+
     /** Undoes the last edit (an eraser gesture counts as one). */
     suspend fun undo(): EditState = onEngine {
         val pdf = doc as? PDFDocument ?: return@onEngine EditState()

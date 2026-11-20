@@ -93,8 +93,10 @@ data class AnnotateState(
     val saving: Boolean = false,
     val canOverwrite: Boolean = false,
     val editable: Boolean = false,
+    /** Opened from a draft with edits from an earlier session (which can't be undone step by step). */
+    val restored: Boolean = false,
 ) {
-    val dirty: Boolean get() = edits.canUndo
+    val dirty: Boolean get() = edits.canUndo || restored
     val currentTool: Tool? get() = if (active) tool else null
     val inkStyle: InkStyle? get() = when (currentTool) {
         Tool.PEN -> pen
@@ -169,7 +171,7 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     fun open(uri: Uri, displayName: String, initialPage: Int, reload: Boolean = false) {
         if (this.uri == uri && !reload) return
         val knownPassword = password.takeIf { this.uri == uri }
-        close()
+        close(discardDraft = false)
         this.uri = uri
         this.fallbackTitle = displayName
         this.displayName = displayName
@@ -177,7 +179,22 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         _state.value = ViewerState.Loading
         openJob = viewModelScope.launch {
             try {
-                val doc = PdfDocument.open(getApplication(), uri)
+                // Unsaved edits from a session Android ended are in a draft, if the file
+                // itself hasn't changed since.
+                val draft = draftFile(uri)
+                val fingerprint = DocumentFiles.fingerprint(getApplication(), uri)
+                originalFingerprint = fingerprint
+                val fromDraft = draft.exists() && fingerprint != null &&
+                    runCatching { fingerprintFile(uri).readText() }.getOrNull() == fingerprint
+                if (!fromDraft) deleteDraft(uri)
+                val doc = try {
+                    PdfDocument.open(getApplication(), if (fromDraft) Uri.fromFile(draft) else uri)
+                } catch (e: Exception) {
+                    if (!fromDraft) throw e
+                    deleteDraft(uri)
+                    PdfDocument.open(getApplication(), uri)
+                }
+                restoredDraft = fromDraft
                 document = doc
                 if (doc.isLocked && knownPassword != null && doc.authenticate(knownPassword)) password = knownPassword
                 if (doc.isLocked) _state.value = ViewerState.NeedsPassword(wrongPassword = false)
@@ -200,7 +217,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
-    fun close() {
+    /** Closes the document. Unless [discardDraft] is off, unsaved edits are thrown away for good. */
+    fun close(discardDraft: Boolean = true) {
+        if (discardDraft) uri?.let(::deleteDraft)
+        restoredDraft = false
         openJob?.cancel()
         searchJob?.cancel()
         document?.close()
@@ -215,17 +235,63 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         _selection.value = null
         _pending.value = emptyMap()
         _versions.value = PageVersions()
-        _annotate.update { it.copy(active = false, edits = EditState(), saving = false) }
+        _annotate.update { it.copy(active = false, edits = EditState(), saving = false, restored = false) }
         _state.value = ViewerState.Idle
     }
 
-    override fun onCleared() = close()
+    // The app is going away: keep any draft, so the edits come back next time.
+    override fun onCleared() = close(discardDraft = false)
+
+    /** Throws away unsaved edits: back to the file as saved. */
+    fun discardChanges() {
+        val current = uri ?: return
+        deleteDraft(current)
+        open(current, displayName, initialPage, reload = true)
+    }
+
+    /**
+     * Stores unsaved edits in a private draft, so they survive Android closing the app. Called
+     * when the app goes to the background.
+     */
+    fun saveDraft() {
+        val doc = document ?: return
+        val current = uri ?: return
+        viewModelScope.launch {
+            runCatching {
+                if (!doc.hasUnsavedChanges()) return@runCatching
+                val fingerprint = originalFingerprint ?: DocumentFiles.fingerprint(getApplication(), current) ?: return@runCatching
+                originalFingerprint = fingerprint
+                doc.saveDraft(draftFile(current))
+                fingerprintFile(current).writeText(fingerprint)
+            }
+        }
+    }
+
+    private var restoredDraft = false
+    private var originalFingerprint: String? = null
+
+    private fun draftKey(uri: Uri): String =
+        java.security.MessageDigest.getInstance("SHA-1").digest(uri.toString().toByteArray()).joinToString("") { "%02x".format(it) }
+
+    private fun draftFile(uri: Uri) = java.io.File(getApplication<Application>().filesDir, "drafts/${draftKey(uri)}.pdf")
+
+    private fun fingerprintFile(uri: Uri) = java.io.File(getApplication<Application>().filesDir, "drafts/${draftKey(uri)}.fingerprint")
+
+    private fun deleteDraft(uri: Uri) {
+        draftFile(uri).delete()
+        fingerprintFile(uri).delete()
+    }
 
     private suspend fun showDocument(doc: PdfDocument) {
         val current = uri ?: return
         _annotate.update {
-            it.copy(editable = doc.isEditable, canOverwrite = DocumentFiles.canWrite(getApplication(), current))
+            it.copy(
+                editable = doc.isEditable,
+                canOverwrite = DocumentFiles.canWrite(getApplication(), current),
+                restored = restoredDraft,
+            )
         }
+        if (restoredDraft) _events.trySend(ViewerEvent.Message("Restored your unsaved changes from last time"))
         val title = doc.title() ?: fallbackTitle
         _state.value = ViewerState.Ready(
             DocumentInfo(
@@ -497,7 +563,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
                 document = fresh
                 doc.close()
                 outline = null
-                _annotate.update { it.copy(saving = false, edits = EditState()) }
+                deleteDraft(current)
+                restoredDraft = false
+                originalFingerprint = null
+                _annotate.update { it.copy(saving = false, edits = EditState(), restored = false) }
                 _events.send(ViewerEvent.Saved)
             } catch (e: CancellationException) {
                 throw e
