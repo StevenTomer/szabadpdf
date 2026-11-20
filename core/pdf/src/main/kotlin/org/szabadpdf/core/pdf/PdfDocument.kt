@@ -619,6 +619,26 @@ class PdfDocument private constructor(
             }
         }
 
+        /**
+         * Writes a copy of the PDF [input] with its annotations and form fields drawn into the
+         * pages themselves, for printing: some printing paths (Android's own PDF renderer among
+         * them) leave annotations out.
+         */
+        suspend fun flatten(input: File, output: File, password: String? = null) = withContext(PdfEngine.dispatcher) {
+            val doc = Document.openDocument(input.path) as? PDFDocument
+                ?: throw UnsupportedOperationException("Only PDF files can be flattened")
+            try {
+                if (doc.needsPassword() && (password == null || !doc.authenticatePassword(password))) {
+                    throw SecurityException("Wrong password")
+                }
+                doc.bake(true, true)
+                output.parentFile?.mkdirs()
+                doc.save(output.path, "garbage,compress")
+            } finally {
+                doc.destroy()
+            }
+        }
+
         private fun openDirect(resolver: ContentResolver, uri: Uri): FdSeekableInputStream? {
             val pfd = runCatching { resolver.openFileDescriptor(uri, "r") }.getOrNull() ?: return null
             if (pfd.statSize < 0) { // a pipe or socket: can't seek

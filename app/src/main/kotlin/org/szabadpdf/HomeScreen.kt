@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -30,12 +31,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** A document open in a tab, as listed on the home screen. */
+data class OpenTab(val uri: android.net.Uri, val name: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
+    openTabs: List<OpenTab>,
     recents: List<RecentFile>,
     onOpenPicker: () -> Unit,
     onScan: () -> Unit,
+    onOpenTab: (android.net.Uri) -> Unit,
     onOpenRecent: (RecentFile) -> Unit,
     onRemoveRecent: (RecentFile) -> Unit,
 ) {
@@ -57,7 +63,7 @@ fun HomeScreen(
             }
         },
     ) { padding ->
-        if (recents.isEmpty()) {
+        if (recents.isEmpty() && openTabs.isEmpty()) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -78,6 +84,23 @@ fun HomeScreen(
             }
         } else {
             LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 168.dp)) {
+                if (openTabs.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Open",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                    }
+                    items(openTabs, key = { "tab:" + it.uri }) { tab ->
+                        ListItem(
+                            headlineContent = { Text(tab.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            leadingContent = { Icon(Icons.Filled.Description, contentDescription = null) },
+                            modifier = Modifier.clickable { onOpenTab(tab.uri) },
+                        )
+                    }
+                }
                 item {
                     Text(
                         "Recent",

@@ -61,6 +61,13 @@ class ZoomState {
         return wantedY - offsetY
     }
 
+    /** Back to the whole page, unzoomed. */
+    fun reset() {
+        scale = MIN_SCALE
+        offsetX = 0f
+        offsetY = 0f
+    }
+
     fun setOffsets(x: Float = offsetX, y: Float = offsetY) {
         offsetX = x
         offsetY = y

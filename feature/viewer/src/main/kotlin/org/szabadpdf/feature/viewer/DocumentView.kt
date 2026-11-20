@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -112,9 +114,10 @@ private val EraserRadius = 12.dp
 private var gestureCounter = 0
 
 /**
- * Continuous vertical list of pages with pinch/double-tap zoom.
+ * The pages, either one at a time ([paged]: swipe sideways to turn) or as a continuous
+ * vertical list, with pinch/double-tap zoom.
  *
- * Pages are rendered once at screen width. When zoomed in and still, the visible part of each
+ * Pages are rendered once at screen size. When zoomed in and still, the visible part of each
  * page is re-rendered at full resolution on top, so text stays crisp at any zoom level without
  * allocating huge bitmaps.
  */
@@ -123,6 +126,8 @@ internal fun DocumentView(
     pageSizes: List<PageSize>,
     source: PageSource,
     listState: LazyListState,
+    pagerState: PagerState,
+    paged: Boolean,
     zoom: ZoomState,
     contentPadding: PaddingValues,
     searchHits: List<SearchHit>,
@@ -134,6 +139,12 @@ internal fun DocumentView(
     val scope = rememberCoroutineScope()
     var tiles by remember { mutableStateOf<Map<Int, DetailTile>>(emptyMap()) }
     val hitsByPage = remember(searchHits) { searchHits.groupBy { it.page } }
+    val isPaged by rememberUpdatedState(paged)
+
+    // Each page starts unzoomed; so does switching between modes.
+    LaunchedEffect(paged, pagerState.settledPage) {
+        if (paged) zoom.reset()
+    }
 
     // When the list hits its end while zoomed, keep moving through the zoom slack instead.
     val overscrollToPan = remember(zoom) {
@@ -162,14 +173,15 @@ internal fun DocumentView(
                             zoom.gestureActive = true
                             zoom.zoomBy(event.calculateZoom(), event.calculateCentroid(useCurrent = true))
                             val leftover = zoom.panBy(event.calculatePan())
-                            if (leftover != 0f) listState.dispatchRawDelta(-leftover / zoom.scale)
+                            if (leftover != 0f && !isPaged) listState.dispatchRawDelta(-leftover / zoom.scale)
                             event.changes.forEach { it.consume() }
                         }
                     } while (event.changes.any { it.pressed })
                     zoom.gestureActive = false
                 }
             }
-            // One finger: the list handles vertical scrolling, this handles sideways (when zoomed).
+            // One finger: the list handles vertical scrolling (or the pager turns pages), this
+            // pans the zoomed view: sideways in the list, any direction in page mode.
             // Once a drag passes the touch slop it's consumed, so lifting the finger isn't a tap.
             // (Parents see the Final pass before children, so the pages' tap detectors notice.)
             .pointerInput(zoom) {
@@ -185,7 +197,7 @@ internal fun DocumentView(
                             travelled += delta
                             if (!dragging && travelled.getDistance() > viewConfiguration.touchSlop) dragging = true
                             if (dragging) {
-                                if (zoom.isZoomed) zoom.panBy(Offset(delta.x, 0f))
+                                if (zoom.isZoomed) zoom.panBy(if (isPaged) delta else Offset(delta.x, 0f))
                                 pressed[0].consume()
                             }
                         }
@@ -195,8 +207,64 @@ internal fun DocumentView(
             .nestedScroll(overscrollToPan),
     ) {
         val itemWidthPx = constraints.maxWidth
+        val viewportW = constraints.maxWidth.toFloat()
+        val viewportH = constraints.maxHeight.toFloat()
 
-        LazyColumn(
+        if (paged) {
+            HorizontalPager(
+                state = pagerState,
+                // While zoomed in, one finger pans the page instead of turning it.
+                userScrollEnabled = !zoom.isZoomed,
+                beyondViewportPageCount = 1,
+                key = { it },
+                modifier = Modifier.fillMaxSize(),
+            ) { index ->
+                val size = pageSizes[index]
+                val box = pageBox(size, viewportW, viewportH)
+                val current = index == pagerState.currentPage
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            if (current) {
+                                transformOrigin = TransformOrigin(0f, 0f)
+                                scaleX = zoom.scale
+                                scaleY = zoom.scale
+                                translationX = zoom.offsetX
+                                translationY = zoom.offsetY
+                            }
+                        },
+                ) {
+                    val density = LocalDensity.current
+                    PageItem(
+                        index = index,
+                        size = size,
+                        widthPx = box.width.roundToInt(),
+                        source = source,
+                        version = layer.versions.of(index),
+                        tile = tiles[index]?.takeIf { current },
+                        hits = hitsByPage[index].orEmpty(),
+                        currentHit = currentHit?.takeIf { it.page == index },
+                        layer = layer,
+                        actions = actions,
+                        zoom = zoom,
+                        modifier = with(density) {
+                            Modifier
+                                .offset { IntOffset(box.left.roundToInt(), box.top.roundToInt()) }
+                                .size(box.width.toDp(), box.height.toDp())
+                        },
+                        onDoubleTap = { local ->
+                            val focus = Offset(
+                                (box.left + local.x) * zoom.scale + zoom.offsetX,
+                                (box.top + local.y) * zoom.scale + zoom.offsetY,
+                            )
+                            val target = if (zoom.isZoomed) ZoomState.MIN_SCALE else ZoomState.DOUBLE_TAP_SCALE
+                            scope.launch { zoom.animateZoomTo(target, focus) }
+                        },
+                    )
+                }
+            }
+        } else LazyColumn(
             state = listState,
             contentPadding = contentPadding,
             verticalArrangement = Arrangement.spacedBy(PageGap),
@@ -224,6 +292,9 @@ internal fun DocumentView(
                     layer = layer,
                     actions = actions,
                     zoom = zoom,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(size.width / size.height),
                     onDoubleTap = { local ->
                         val info = listState.layoutInfo
                         val item = info.visibleItemsInfo.firstOrNull { it.index == index } ?: return@PageItem
@@ -242,10 +313,11 @@ internal fun DocumentView(
 
     // Sharp tiles for the visible area, once zooming and scrolling have settled.
     val versions by rememberUpdatedState(layer.versions)
-    LaunchedEffect(listState, zoom, source) {
+    LaunchedEffect(listState, pagerState, zoom, source, paged) {
         snapshotFlow {
             listOf(
                 versions,
+                pagerState.currentPage, pagerState.isScrollInProgress,
                 zoom.scale, zoom.offsetX, zoom.offsetY, zoom.gestureActive, zoom.viewport,
                 listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, listState.isScrollInProgress,
             )
@@ -254,11 +326,18 @@ internal fun DocumentView(
                 tiles = emptyMap()
                 return@collectLatest
             }
-            if (zoom.gestureActive || listState.isScrollInProgress) return@collectLatest
+            if (zoom.gestureActive || listState.isScrollInProgress || pagerState.isScrollInProgress) return@collectLatest
             delay(80)
             val fresh = mutableMapOf<Int, DetailTile>()
             val drawnVersions = versions
-            visibleRegions(listState, zoom).forEach { region ->
+            val regions = if (paged) {
+                val page = pagerState.currentPage
+                val box = pageBox(pageSizes[page], zoom.viewport.width.toFloat(), zoom.viewport.height.toFloat())
+                listOfNotNull(regionOf(page, box.left, box.top, box.width, box.height, zoom))
+            } else {
+                visibleRegions(listState, zoom)
+            }
+            regions.forEach { region ->
                 val bitmap = source.renderRegion(
                     region.page, region.fullWidth, region.fullHeight,
                     region.x, region.y, region.width, region.height,
@@ -279,33 +358,51 @@ private data class Region(
     val x: Int, val y: Int, val width: Int, val height: Int,
 )
 
-/** For each page on screen, the part that's visible, in pixels of the page scaled by the zoom. */
+/** Where a page sits, unzoomed, when fitted whole into the viewport (page mode). */
+private class PageBox(val left: Float, val top: Float, val width: Float, val height: Float)
+
+private fun pageBox(size: PageSize, viewportW: Float, viewportH: Float): PageBox {
+    val fit = min(viewportW / size.width, viewportH / size.height)
+    val w = size.width * fit
+    val h = size.height * fit
+    return PageBox((viewportW - w) / 2, (viewportH - h) / 2, w, h)
+}
+
+/** For each page on screen in the list, the part that's visible. */
 private fun visibleRegions(listState: LazyListState, zoom: ZoomState): List<Region> {
     val info = listState.layoutInfo
-    val s = zoom.scale
-    val w = zoom.viewport.width.toFloat()
-    val h = zoom.viewport.height.toFloat()
-    val left = max(0f, -zoom.offsetX / s)
-    val right = min(w, (w - zoom.offsetX) / s)
     return info.visibleItemsInfo.mapNotNull { item ->
         val drawnTop = (item.offset - info.viewportStartOffset).toFloat()
-        val top = max(0f, -zoom.offsetY / s - drawnTop)
-        val bottom = min(item.size.toFloat(), (h - zoom.offsetY) / s - drawnTop)
-        if (bottom <= top || right <= left) return@mapNotNull null
-        val fullWidth = (w * s).roundToInt()
-        val fullHeight = (item.size * s).roundToInt()
-        val x = (left * s).toInt()
-        val y = (top * s).toInt()
-        Region(
-            page = item.index,
-            fullWidth = fullWidth,
-            fullHeight = fullHeight,
-            x = x,
-            y = y,
-            width = min(ceil((right - left) * s).toInt(), fullWidth - x),
-            height = min(ceil((bottom - top) * s).toInt(), fullHeight - y),
-        )
+        regionOf(item.index, 0f, drawnTop, zoom.viewport.width.toFloat(), item.size.toFloat(), zoom)
     }
+}
+
+/**
+ * The visible part of a page drawn (before zooming) at [left], [top] with size [w] × [h], in
+ * pixels of the page scaled by the zoom; null if none of it is on screen.
+ */
+private fun regionOf(page: Int, left: Float, top: Float, w: Float, h: Float, zoom: ZoomState): Region? {
+    val s = zoom.scale
+    val viewW = zoom.viewport.width.toFloat()
+    val viewH = zoom.viewport.height.toFloat()
+    val x0 = max(0f, -zoom.offsetX / s - left)
+    val x1 = min(w, (viewW - zoom.offsetX) / s - left)
+    val y0 = max(0f, -zoom.offsetY / s - top)
+    val y1 = min(h, (viewH - zoom.offsetY) / s - top)
+    if (x1 <= x0 || y1 <= y0) return null
+    val fullWidth = (w * s).roundToInt()
+    val fullHeight = (h * s).roundToInt()
+    val x = (x0 * s).toInt()
+    val y = (y0 * s).toInt()
+    return Region(
+        page = page,
+        fullWidth = fullWidth,
+        fullHeight = fullHeight,
+        x = x,
+        y = y,
+        width = min(ceil((x1 - x0) * s).toInt(), fullWidth - x),
+        height = min(ceil((y1 - y0) * s).toInt(), fullHeight - y),
+    )
 }
 
 @Composable
@@ -321,6 +418,7 @@ private fun PageItem(
     layer: AnnotationLayer,
     actions: PageActions,
     zoom: ZoomState,
+    modifier: Modifier,
     onDoubleTap: (Offset) -> Unit,
 ) {
     // After an edit the old picture stays up until the new one is ready.
@@ -341,9 +439,7 @@ private fun PageItem(
     val selection = layer.selection?.takeIf { it.page == index }
 
     Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(size.width / size.height)
+        modifier
             .background(Color.White)
             // Drawing tools. Runs before the list, so a drawing finger doesn't also scroll.
             // Settings are read per stroke, not used as keys: changing them mustn't cut a stroke short.

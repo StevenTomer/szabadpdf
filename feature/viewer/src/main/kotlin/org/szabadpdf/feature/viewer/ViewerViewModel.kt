@@ -135,6 +135,11 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     private val _selection = MutableStateFlow<TextSelection?>(null)
     val selection: StateFlow<TextSelection?> = _selection.asStateFlow()
 
+    private val _paged = MutableStateFlow(prefs.getBoolean(KEY_PAGED, true))
+
+    /** Page by page (swipe sideways) rather than one continuous scroll. Remembered as the default. */
+    val paged: StateFlow<Boolean> = _paged.asStateFlow()
+
     private val _events = Channel<ViewerEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
@@ -311,6 +316,44 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     }
 
     // --- annotating ------------------------------------------------------------------------
+
+    fun setPaged(paged: Boolean) {
+        _paged.value = paged
+        prefs.edit().putBoolean(KEY_PAGED, paged).apply()
+    }
+
+    /** Frees page pictures while this document's tab is in the background. */
+    fun trimMemory() {
+        pageCache.evictAll()
+    }
+
+    /**
+     * Writes the document as it is now, unsaved annotations included, to a file in the cache
+     * named after it, for sharing or printing. Replaces the previous export. [flattened] draws
+     * the annotations into the pages, for printing.
+     */
+    suspend fun exportCopy(flattened: Boolean = false): java.io.File? {
+        val doc = document ?: return null
+        val app = getApplication<Application>()
+        val dir = java.io.File(app.cacheDir, "share").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val base = displayName.ifBlank { "Document" }.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val file = java.io.File(dir, if (base.endsWith(".pdf", ignoreCase = true)) base else "$base.pdf")
+        return try {
+            doc.saveTo(app, Uri.fromFile(file))
+            if (!flattened) return file
+            val flat = java.io.File(dir, "print").let { it.mkdirs(); java.io.File(it, file.name) }
+            PdfDocument.flatten(file, flat, password)
+            flat
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            report("Couldn't prepare the file", e)
+            null
+        }
+    }
 
     fun setAnnotating(active: Boolean) {
         _annotate.update { it.copy(active = active && it.editable) }
@@ -536,5 +579,6 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
 
     private companion object {
         const val KEY_STYLUS_SEEN = "stylus_seen"
+        const val KEY_PAGED = "paged"
     }
 }

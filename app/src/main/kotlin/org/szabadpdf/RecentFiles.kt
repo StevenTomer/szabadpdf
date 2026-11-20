@@ -42,9 +42,10 @@ class RecentFiles(private val context: Context) {
         list.map { if (it.uri == uri) it.copy(lastPage = page) else it }
     }
 
-    fun remove(uri: Uri) {
+    /** Forgets [uri]; with [releaseAccess], also gives up the permission to read it. */
+    fun remove(uri: Uri, releaseAccess: Boolean = true) {
         update { list -> list.filterNot { it.uri == uri } }
-        runCatching {
+        if (releaseAccess) runCatching {
             context.contentResolver.releasePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

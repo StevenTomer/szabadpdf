@@ -64,6 +64,14 @@ APK per processor type (arm64-v8a, armeabi-v7a, x86_64, x86), since the native l
 OpenCV, LiteRT) are large. The first build downloads the scanner's segmentation model from GitHub
 and checks its SHA-256.
 
+## Viewing
+
+Documents open page by page (swipe sideways to turn pages) by default; "Scroll continuously" in
+the ⋮ menu switches to one long scroll and is remembered. Every opened document stays open in a
+tab (kept across restarts, up to 10). The ⋮ menu also has Share, Save as and Print; sharing and
+printing include unsaved annotations, and printing draws them into the pages so every printer
+shows them.
+
 ## Roadmap
 
 1. Viewer (done: scrolling, pinch and double-tap zoom with sharp re-rendering, search, table of contents, links, go to page, recent files)

@@ -11,6 +11,8 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.core.content.FileProvider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberUpdatedState
@@ -112,6 +114,7 @@ fun ViewerScreen(
     onPageChanged: (page: Int) -> Unit,
     onOrganize: ((currentPage: Int) -> Unit)? = null,
     onSavedAs: (Uri) -> Unit = {},
+    tabs: TabsUi? = null,
 ) {
     val state by viewModel.state.collectAsState()
     when (val s = state) {
@@ -121,7 +124,7 @@ fun ViewerScreen(
         is ViewerState.Error -> ErrorScreen(s.message, onBack)
         is ViewerState.NeedsPassword -> PasswordDialog(s.wrongPassword, viewModel::submitPassword, onBack)
         is ViewerState.Ready -> key(s.document.uri) {
-            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs)
+            DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs, tabs)
         }
     }
 }
@@ -141,10 +144,13 @@ private fun DocumentScreen(
     onPageChanged: (Int) -> Unit,
     onOrganize: ((Int) -> Unit)?,
     onSavedAs: (Uri) -> Unit,
+    tabs: TabsUi?,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = info.initialPage)
+    val pagerState = rememberPagerState(initialPage = info.initialPage) { info.pageSizes.size }
+    val paged by viewModel.paged.collectAsState()
     val zoom = remember { ZoomState() }
     val search by viewModel.search.collectAsState()
     val annotate by viewModel.annotate.collectAsState()
@@ -167,7 +173,17 @@ private fun DocumentScreen(
     /** The word first selected by a long press, which dragging extends from. */
     var dragAnchor by remember { mutableStateOf<TextSelection?>(null) }
 
-    val currentPage by remember { derivedStateOf { zoom.currentPage(listState) } }
+    val currentPage by remember {
+        derivedStateOf { if (paged) pagerState.currentPage else zoom.currentPage(listState) }
+    }
+
+    /** Switches between page-by-page and continuous, staying on the same page. */
+    fun setPaged(toPaged: Boolean) {
+        val page = currentPage
+        zoom.reset()
+        if (toPaged) pagerState.requestScrollToPage(page) else listState.requestScrollToItem(page)
+        viewModel.setPaged(toPaged)
+    }
 
     LaunchedEffect(Unit) {
         snapshotFlow { currentPage }.distinctUntilChanged().debounce(400).collect(onPageChanged)
@@ -191,6 +207,7 @@ private fun DocumentScreen(
         }
     }
 
+    // Save as / save a copy: the new file then opens (in place of this one) in the viewer.
     val copyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         if (uri == null) {
             afterSave = null
@@ -224,9 +241,26 @@ private fun DocumentScreen(
     }
     BackHandler(onBack = ::leave)
 
+    fun share() = scope.launch {
+        val file = viewModel.exportCopy() ?: return@launch
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("application/pdf")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(Intent.createChooser(send, null))
+    }
+
+    fun print() = scope.launch {
+        val file = viewModel.exportCopy(flattened = true) ?: return@launch
+        val printing = context.getSystemService(android.print.PrintManager::class.java) ?: return@launch
+        printing.print(file.nameWithoutExtension, PdfPrintAdapter(file), null)
+    }
+
     val systemBars = WindowInsets.systemBars.asPaddingValues()
+    val showTabs = tabs != null && tabs.tabs.isNotEmpty()
     val contentPadding = PaddingValues(
-        top = systemBars.calculateTopPadding() + 64.dp + PageGap,
+        top = systemBars.calculateTopPadding() + 64.dp + (if (showTabs) TabStripHeight else 0.dp) + PageGap,
         bottom = systemBars.calculateBottomPadding() + 72.dp,
     )
 
@@ -236,6 +270,11 @@ private fun DocumentScreen(
             val width = zoom.viewport.width.toFloat()
             val pxPerPt = width / info.pageSizes[page].width
             val before = listState.layoutInfo.beforeContentPadding
+            if (paged) {
+                zoom.reset()
+                pagerState.scrollToPage(page)
+                return@launch
+            }
             zoom.setOffsets(y = 0f)
             if (yPt == null) {
                 listState.scrollToItem(page)
@@ -331,6 +370,8 @@ private fun DocumentScreen(
             pageSizes = info.pageSizes,
             source = viewModel,
             listState = listState,
+            pagerState = pagerState,
+            paged = paged,
             zoom = zoom,
             contentPadding = contentPadding,
             searchHits = search.hits,
@@ -392,27 +433,39 @@ private fun DocumentScreen(
                     },
                     colors = barColors,
                 )
-                else -> TopAppBar(
-                    title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    navigationIcon = {
-                        IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                    },
-                    actions = {
-                        if (annotate.dirty) IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") }
-                        IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
-                        IconButton(onClick = { showOutline = true }) { Icon(Icons.AutoMirrored.Filled.List, "Contents") }
-                        if (annotate.editable) {
-                            IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
-                        }
-                        if (onOrganize != null && annotate.editable) {
-                            IconButton(onClick = {
-                                if (annotate.dirty) unsavedPrompt = { onOrganize(currentPage) } to false
-                                else onOrganize(currentPage)
-                            }) { Icon(Icons.Filled.GridView, "Organize pages") }
-                        }
-                    },
-                    colors = barColors,
-                )
+                else -> Column {
+                    TopAppBar(
+                        title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        navigationIcon = {
+                            IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        },
+                        actions = {
+                            if (annotate.dirty) IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") }
+                            IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
+                            if (annotate.editable) {
+                                IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
+                            }
+                            MoreMenu(
+                                paged = paged,
+                                canOrganize = onOrganize != null && annotate.editable,
+                                canSave = annotate.editable,
+                                onContents = { showOutline = true },
+                                onOrganize = {
+                                    if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
+                                    else onOrganize?.invoke(currentPage)
+                                },
+                                onPaged = ::setPaged,
+                                onShare = { share() },
+                                onSaveAs = { copyPicker.launch(info.name) },
+                                onPrint = { print() },
+                            )
+                        },
+                        colors = barColors,
+                    )
+                    if (showTabs) TabStrip(tabs!!, onClose = {
+                        if (annotate.dirty) unsavedPrompt = tabs.onClose to true else tabs.onClose()
+                    })
+                }
             }
         }
 

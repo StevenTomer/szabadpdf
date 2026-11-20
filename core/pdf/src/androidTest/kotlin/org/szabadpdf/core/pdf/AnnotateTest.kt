@@ -127,4 +127,22 @@ class AnnotateTest {
         assertEquals(setOf(AnnotationKind.INK, AnnotationKind.NOTE), doc.annotations(0).map { it.kind }.toSet())
         assertFalse(doc.editState().canUndo)
     }
+
+    @Test
+    fun flattenDrawsAnnotationsIntoThePage() = runBlocking {
+        val word = doc.selectWord(2, szabad())!!
+        doc.addMarkup(2, word.start, word.end, MarkupKind.HIGHLIGHT, 0xFFEB3B)
+        val copy = File(context.cacheDir, "annotated-copy.pdf").apply { delete() }
+        doc.saveTo(context, Uri.fromFile(copy))
+        val flat = File(context.cacheDir, "flat.pdf").apply { delete() }
+        PdfDocument.flatten(copy, flat)
+
+        val result = PdfDocument.open(context, Uri.fromFile(flat)).also { extra += it }
+        assertEquals(12, result.pageCount)
+        assertTrue("no annotations left", result.annotations(2).isEmpty())
+        // ...but the highlight is still there on the page.
+        val y = (word.rects[0].top + 1).toInt()
+        val x = ((word.rects[0].left + word.rects[0].right) / 2).toInt()
+        assertNotEquals(Color.WHITE, result.renderPage(2, 612).getPixel(x, y))
+    }
 }

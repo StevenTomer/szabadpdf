@@ -23,15 +23,21 @@ import org.szabadpdf.feature.organize.OrganizeScreen
 import org.szabadpdf.feature.organize.OrganizeViewModel
 import org.szabadpdf.feature.scan.ScanScreen
 import org.szabadpdf.feature.scan.ScanViewModel
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
+import org.szabadpdf.feature.viewer.DocumentTab
+import org.szabadpdf.feature.viewer.TabsUi
 import org.szabadpdf.feature.viewer.ViewerScreen
 import org.szabadpdf.feature.viewer.ViewerViewModel
 
 class MainActivity : ComponentActivity() {
 
-    private val viewer: ViewerViewModel by viewModels()
     private val organizer: OrganizeViewModel by viewModels()
     private val scanner: ScanViewModel by viewModels()
     private lateinit var recents: RecentFiles
+    private lateinit var openTabs: OpenTabs
 
     /** A document handed to us by another app, waiting to be shown. */
     private var incoming by mutableStateOf<Uri?>(null)
@@ -40,16 +46,17 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         recents = RecentFiles(applicationContext)
+        openTabs = OpenTabs(applicationContext)
         if (savedInstanceState == null) incoming = intent.documentUri()
         addOnNewIntentListener { it.documentUri()?.let { uri -> incoming = uri } }
 
         setContent {
             SzabadTheme {
                 App(
-                    viewer = viewer,
                     organizer = organizer,
                     scanner = scanner,
                     recents = recents,
+                    openTabs = openTabs,
                     incoming = incoming,
                     onIncomingHandled = { incoming = null },
                 )
@@ -62,37 +69,46 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun App(
-    viewer: ViewerViewModel,
     organizer: OrganizeViewModel,
     scanner: ScanViewModel,
     recents: RecentFiles,
+    openTabs: OpenTabs,
     incoming: Uri?,
     onIncomingHandled: () -> Unit,
 ) {
     val context = LocalContext.current
-    var openUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    val owner = checkNotNull(LocalViewModelStoreOwner.current)
+    val tabs by openTabs.tabs.collectAsState()
+    val active by openTabs.active.collectAsState()
+    val recentItems by recents.items.collectAsState()
+    /** Showing the home screen even though tabs are open. */
+    var home by rememberSaveable { mutableStateOf(false) }
     /** Page to start the organize grid at, or -1 when not organizing. */
     var organizeFrom by rememberSaveable { mutableIntStateOf(-1) }
     var scanning by rememberSaveable { mutableStateOf(false) }
+    // Each tab's scroll position and other screen state, kept while it's in the background.
+    val tabStates = rememberSaveableStateHolder()
+
+    /** Each open document has its own view model, so switching tabs keeps it open (edits too). */
+    fun viewerFor(uri: Uri): ViewerViewModel = ViewModelProvider(owner)["viewer:$uri", ViewerViewModel::class.java]
+
+    fun closeTab(uri: Uri) {
+        viewerFor(uri).close()
+        tabStates.removeState(uri.toString())
+        openTabs.close(uri)
+    }
 
     fun show(uri: Uri) {
         organizer.discard()
         organizeFrom = -1
-        val entry = recents.recordOpened(uri)
-        viewer.open(uri, entry.name, entry.lastPage)
-        openUri = uri
-    }
-
-    fun closeDocument() {
-        organizer.discard()
-        organizeFrom = -1
-        viewer.close()
-        openUri = null
+        recents.recordOpened(uri)
+        openTabs.open(uri).forEach(::closeTab)
+        home = false
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            // Keep access across restarts so the file can be reopened from Recent.
+            // Keep access across restarts so the file can be reopened from Recent and its tab.
             // Write access too where the provider allows it, so edits can be saved in place.
             val resolver = context.contentResolver
             runCatching {
@@ -113,16 +129,9 @@ private fun App(
         }
     }
 
-    // After a configuration change the view model still has the document; after process
-    // death it doesn't, so reopen it.
-    LaunchedEffect(openUri) {
-        openUri?.let { uri ->
-            val entry = recents.get(uri)
-            viewer.open(uri, entry?.name ?: "Document", entry?.lastPage ?: 0)
-        }
-    }
+    fun nameOf(uri: Uri) = recentItems.firstOrNull { it.uri == uri }?.name ?: uri.lastPathSegment ?: "Document"
 
-    val current = openUri
+    val current = active
     if (scanning) {
         ScanScreen(
             viewModel = scanner,
@@ -132,18 +141,21 @@ private fun App(
             },
             onClose = { scanning = false },
         )
-    } else if (current == null) {
-        val items by recents.items.collectAsState()
+    } else if (current == null || home) {
+        if (current != null) BackHandler { home = false }
         HomeScreen(
-            recents = items,
+            openTabs = tabs.map { OpenTab(it, nameOf(it)) },
+            recents = recentItems,
             onOpenPicker = { picker.launch(arrayOf("application/pdf")) },
             onScan = { scanning = true },
+            onOpenTab = { show(it) },
             onOpenRecent = { show(it.uri) },
-            onRemoveRecent = { recents.remove(it.uri) },
+            onRemoveRecent = { recents.remove(it.uri, releaseAccess = it.uri !in tabs) },
         )
     } else if (organizeFrom >= 0) {
+        val viewer = viewerFor(current)
         LaunchedEffect(current) {
-            organizer.start(current, recents.get(current)?.name ?: "Document", viewer.password)
+            organizer.start(current, nameOf(current), viewer.password)
         }
         OrganizeScreen(
             viewModel = organizer,
@@ -164,13 +176,37 @@ private fun App(
             },
         )
     } else {
-        BackHandler(onBack = ::closeDocument)
-        ViewerScreen(
-            viewModel = viewer,
-            onBack = ::closeDocument,
-            onPageChanged = { page -> recents.updatePage(current, page) },
-            onOrganize = { page -> organizeFrom = page },
-            onSavedAs = { copy -> show(copy) },
-        )
+        val viewer = viewerFor(current)
+        // Opens the document the first time its tab shows (also after the app was restarted).
+        LaunchedEffect(current) {
+            val entry = recents.get(current)
+            viewer.open(current, entry?.name ?: "Document", entry?.lastPage ?: 0)
+        }
+        DisposableEffect(current) {
+            onDispose { viewer.trimMemory() }
+        }
+        BackHandler { home = true }
+        tabStates.SaveableStateProvider(current.toString()) {
+            ViewerScreen(
+                viewModel = viewer,
+                onBack = { home = true },
+                onPageChanged = { page -> recents.updatePage(current, page) },
+                onOrganize = { page -> organizeFrom = page },
+                onSavedAs = { copy ->
+                    // The copy has the changes; the original stays as it was on disk.
+                    viewer.close()
+                    tabStates.removeState(current.toString())
+                    recents.recordOpened(copy)
+                    openTabs.replace(current, copy)
+                },
+                tabs = TabsUi(
+                    tabs = tabs.map { DocumentTab(it.toString(), nameOf(it)) },
+                    active = current.toString(),
+                    onSelect = { id -> openTabs.select(Uri.parse(id)) },
+                    onClose = { closeTab(current) },
+                    onNew = { home = true },
+                ),
+            )
+        }
     }
 }
