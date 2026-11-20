@@ -169,6 +169,11 @@ private fun DocumentScreen(
     var showGoTo by rememberSaveable { mutableStateOf(false) }
     var showStyle by rememberSaveable { mutableStateOf(false) }
     var showProtect by rememberSaveable { mutableStateOf(false) }
+    var showPad by rememberSaveable { mutableStateOf(false) }
+    /** Where to put the signature once it's been drawn. */
+    var signAt by remember { mutableStateOf<NewNote?>(null) }
+    val signature by viewModel.signature.collectAsState()
+    val signatureSize by viewModel.signatureSize.collectAsState()
     /** A password change waiting for the user to pick where the protected copy goes. */
     var pendingPassword by remember { mutableStateOf<ViewerViewModel.PasswordChange?>(null) }
     var newNote by remember { mutableStateOf<NewNote?>(null) }
@@ -339,6 +344,12 @@ private fun DocumentScreen(
                 val state = viewModel.annotate.value
                 when (state.currentTool) {
                     Tool.NOTE -> newNote = NewNote(page, PdfPoint(point.x - 12f, point.y - 12f))
+                    Tool.SIGNATURE -> if (viewModel.signature.value == null) {
+                        signAt = NewNote(page, point) // draw it first, then it goes here
+                        showPad = true
+                    } else {
+                        viewModel.placeSignature(page, point)
+                    }
                     Tool.SELECT -> scope.launch {
                         viewModel.annotationAt(page, point, slop(page))?.let { tapped = AnnotationTap(page, it) }
                     }
@@ -512,8 +523,15 @@ private fun DocumentScreen(
             AnnotateToolbar(
                 state = annotate,
                 onTool = { tool ->
-                    if (tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT)) showStyle = true
-                    else viewModel.selectTool(tool)
+                    when {
+                        tool == annotate.tool && tool in setOf(Tool.PEN, Tool.HIGHLIGHTER, Tool.TEXT_HIGHLIGHT) -> showStyle = true
+                        // Picking the signature tool without a signature, or picking it again: the pad.
+                        tool == Tool.SIGNATURE && (signature == null || annotate.tool == Tool.SIGNATURE) -> {
+                            viewModel.selectTool(tool)
+                            showPad = true
+                        }
+                        else -> viewModel.selectTool(tool)
+                    }
                 },
                 onStyle = { showStyle = true },
             )
@@ -642,6 +660,24 @@ private fun DocumentScreen(
                 }
             } else null,
             onDismiss = { unsavedPrompt = null },
+        )
+    }
+
+    if (showPad) {
+        SignaturePad(
+            existing = signature,
+            initialSize = signatureSize,
+            onSave = { drawn, size ->
+                showPad = false
+                viewModel.saveSignature(drawn, size)
+                signAt?.let { viewModel.placeSignature(it.page, it.point) }
+                signAt = null
+                if (drawn != null) scope.launch { snackbar.showSnackbar("Tap the page where your signature should go") }
+            },
+            onDismiss = {
+                showPad = false
+                signAt = null
+            },
         )
     }
 

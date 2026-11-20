@@ -259,11 +259,14 @@ class PdfDocument private constructor(
         }
 
     /** Adds one freehand stroke as an ink annotation. */
-    suspend fun addInk(index: Int, points: List<PdfPoint>, style: InkStyle): EditState = onEngine {
-        require(points.isNotEmpty())
-        edit(index, "Ink") { page ->
+    suspend fun addInk(index: Int, points: List<PdfPoint>, style: InkStyle): EditState = addInk(index, listOf(points), style, "Ink")
+
+    /** Adds several strokes as one ink annotation (e.g. a signature), undone as one. */
+    suspend fun addInk(index: Int, strokes: List<List<PdfPoint>>, style: InkStyle, label: String): EditState = onEngine {
+        require(strokes.isNotEmpty() && strokes.all { it.isNotEmpty() })
+        edit(index, label) { page ->
             val annot = page.createAnnotation(PDFAnnotation.TYPE_INK)
-            annot.setInkList(arrayOf(points.map { toPage(index, it) }.toTypedArray()))
+            annot.setInkList(strokes.map { stroke -> stroke.map { toPage(index, it) }.toTypedArray() }.toTypedArray())
             annot.setColor(rgb(style.color))
             annot.setBorderWidth(style.width)
             if (style.opacity < 1f) annot.setOpacity(style.opacity)

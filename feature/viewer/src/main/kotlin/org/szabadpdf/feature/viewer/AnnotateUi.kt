@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FormatStrikethrough
 import androidx.compose.material.icons.filled.FormatUnderlined
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material3.AlertDialog
@@ -98,6 +99,7 @@ internal fun AnnotateToolbar(
             ToolButton(Tool.HIGHLIGHTER, Icons.Filled.Brush, "Highlighter pen", state.tool, onTool, accent = state.highlighter.color)
             ToolButton(Tool.TEXT_HIGHLIGHT, Icons.Filled.BorderColor, "Highlight text", state.tool, onTool, accent = state.markupColor)
             ToolButton(Tool.NOTE, Icons.AutoMirrored.Filled.StickyNote2, "Note", state.tool, onTool)
+            ToolButton(Tool.SIGNATURE, Icons.Filled.Gesture, "Signature", state.tool, onTool)
             ToolButton(Tool.ERASER, EraserIcon, "Eraser", state.tool, onTool)
             IconButton(onClick = onStyle) { Icon(Icons.Filled.Palette, "Pen settings") }
         }

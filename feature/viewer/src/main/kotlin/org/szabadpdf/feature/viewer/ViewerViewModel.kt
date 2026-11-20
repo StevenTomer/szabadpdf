@@ -77,6 +77,8 @@ enum class Tool(val draws: Boolean) {
     /** Drag across text to highlight it. */
     TEXT_HIGHLIGHT(true),
     NOTE(false),
+    /** Tap to place the saved signature. */
+    SIGNATURE(false),
     ERASER(true),
 }
 
@@ -488,6 +490,36 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
 
     fun deleteAnnotation(page: Int, id: Int) = editPage(page, "Couldn't delete that") {
         it.deleteAnnotation(page, id)
+    }
+
+    private val signatures = SignatureStore(application)
+    private val _signature = MutableStateFlow(signatures.load())
+    val signature: StateFlow<Signature?> = _signature.asStateFlow()
+    private val _signatureSize = MutableStateFlow(signatures.size)
+    val signatureSize: StateFlow<SignatureSize> = _signatureSize.asStateFlow()
+
+    fun saveSignature(signature: Signature?, size: SignatureSize) {
+        if (signature != null) {
+            signatures.save(signature)
+            _signature.value = signature
+        }
+        signatures.size = size
+        _signatureSize.value = size
+    }
+
+    /** Puts the signature on [page], centred on [center] (kept within the page). */
+    fun placeSignature(page: Int, center: PdfPoint) {
+        val signature = _signature.value ?: return
+        val pageSize = (state.value as? ViewerState.Ready)?.document?.pageSizes?.getOrNull(page) ?: return
+        val width = _signatureSize.value.widthPt.coerceAtMost(pageSize.width * 0.9f)
+        val height = width / signature.aspect
+        val left = (center.x - width / 2).coerceIn(0f, (pageSize.width - width).coerceAtLeast(0f))
+        val top = (center.y - height / 2).coerceIn(0f, (pageSize.height - height).coerceAtLeast(0f))
+        val strokes = signature.strokes.filter { it.isNotEmpty() }.map { stroke ->
+            stroke.map { PdfPoint(left + it.x * width, top + it.y * height) }
+        }
+        val style = InkStyle(SIGNATURE_COLOR, (width * 0.012f).coerceAtLeast(1f))
+        editPage(page, "Couldn't place the signature") { it.addInk(page, strokes, style, "Signature") }
     }
 
     fun undo() = editAll { it.undo() }
