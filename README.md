@@ -19,6 +19,10 @@ No ads, no tracking, no watermarks, no paid tiers. Licensed under the [AGPL-3.0]
 - Reduce file size by recompressing large photos
 - Scan: camera to PDF with automatic page detection and cleanup, into a new or an existing
   document; English OCR makes scans searchable, and can be run on existing scanned PDFs
+- Open PDFs: tick several PDFs in a folder (starting in the current document's) and open them
+  together; uses Android's "All files access", asked for on first use, with the system file
+  picker for cloud drives and as a fallback
+- Document properties: view and edit the title, author, subject and keywords
 - Share, save as, print; open and save files anywhere through Android's file picker
 
 **Later**

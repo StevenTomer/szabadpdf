@@ -94,3 +94,11 @@ data class FormField(
     val multiline: Boolean,
     val readOnly: Boolean,
 )
+
+/** The document's own description of itself (PDF "Info"); blank where it has none. */
+data class DocumentProperties(
+    val title: String = "",
+    val author: String = "",
+    val subject: String = "",
+    val keywords: String = "",
+)

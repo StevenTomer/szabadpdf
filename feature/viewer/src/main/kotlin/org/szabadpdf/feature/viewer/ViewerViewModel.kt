@@ -36,7 +36,8 @@ sealed interface ViewerState {
     data object Loading : ViewerState
     data class NeedsPassword(val wrongPassword: Boolean) : ViewerState
     data class Ready(val document: DocumentInfo) : ViewerState
-    data class Error(val message: String) : ViewerState
+    /** [noAccess]: Android no longer lets the app read the file (e.g. access lent by another app ended). */
+    data class Error(val message: String, val noAccess: Boolean = false) : ViewerState
 }
 
 data class DocumentInfo(
@@ -230,7 +231,9 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.value = ViewerState.Error(e.message ?: e.javaClass.simpleName)
+                val noAccess = generateSequence<Throwable>(e) { it.cause }.any { it is SecurityException } ||
+                    !org.szabadpdf.core.pdf.LocalFiles.canRead(getApplication(), uri)
+                _state.value = ViewerState.Error(e.message ?: e.javaClass.simpleName, noAccess)
             }
         }
     }
@@ -645,6 +648,13 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    /** The title, author and so on stored in the document. */
+    suspend fun properties(): org.szabadpdf.core.pdf.DocumentProperties? =
+        document?.let { doc -> runCatching { doc.properties() }.getOrNull() }
+
+    /** Changes them, as an edit (saved with Save, undoable). */
+    fun setProperties(properties: org.szabadpdf.core.pdf.DocumentProperties) = editAll { it.setProperties(properties) }
+
     fun undo() = editAll { it.undo() }
 
     fun redo() = editAll { it.redo() }
@@ -943,6 +953,9 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         val doc = document ?: return
         viewModelScope.launch {
             runCatching { change(doc) }.onSuccess {
+                // The title may have changed (document properties, or undoing that).
+                val title = runCatching { doc.title() }.getOrNull() ?: fallbackTitle
+                _state.update { s -> if (s is ViewerState.Ready) s.copy(document = s.document.copy(title = title)) else s }
                 _fields.value.keys.forEach { p -> refreshFields(doc, p) }
                 outline = null
                 _versions.update { v -> PageVersions(all = v.all + 1) }

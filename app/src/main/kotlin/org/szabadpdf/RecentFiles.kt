@@ -38,6 +38,12 @@ class RecentFiles(private val context: Context) {
         return entry
     }
 
+    /** Puts [new] in [old]'s place, keeping its page (e.g. the same file, reached a better way). */
+    fun replace(old: Uri, new: Uri) = update { list ->
+        val entry = list.firstOrNull { it.uri == old } ?: return@update list
+        list.filterNot { it.uri == new }.map { if (it.uri == old) entry.copy(uri = new) else it }
+    }
+
     fun updatePage(uri: Uri, page: Int) = update { list ->
         list.map { if (it.uri == uri) it.copy(lastPage = page) else it }
     }

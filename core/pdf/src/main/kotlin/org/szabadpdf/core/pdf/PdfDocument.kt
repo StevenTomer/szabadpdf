@@ -74,6 +74,21 @@ class PdfDocument private constructor(
         ok
     }
 
+    suspend fun properties(): DocumentProperties = onEngine {
+        fun get(key: String) = doc.getMetaData(key).orEmpty().trim()
+        DocumentProperties(get(Document.META_INFO_TITLE), get(Document.META_INFO_AUTHOR), get(INFO_SUBJECT), get(INFO_KEYWORDS))
+    }
+
+    /** Changes the title, author, subject and keywords; one undoable step. */
+    suspend fun setProperties(properties: DocumentProperties): EditState = onEngine {
+        editDocument("Document properties") {
+            doc.setMetaData(Document.META_INFO_TITLE, properties.title.trim())
+            doc.setMetaData(Document.META_INFO_AUTHOR, properties.author.trim())
+            doc.setMetaData(INFO_SUBJECT, properties.subject.trim())
+            doc.setMetaData(INFO_KEYWORDS, properties.keywords.trim())
+        }
+    }
+
     suspend fun title(): String? = onEngine {
         doc.getMetaData(Document.META_INFO_TITLE)?.takeIf { it.isNotBlank() }
     }
@@ -709,6 +724,24 @@ class PdfDocument private constructor(
         return currentEditState()
     }
 
+    /** Like [edit], for changes that aren't on a page. */
+    private fun editDocument(label: String, block: () -> Unit): EditState {
+        val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be edited")
+        if (!journal) {
+            pdf.enableJournal()
+            journal = true
+        }
+        pdf.beginOperation("$label#${++operations}")
+        try {
+            block()
+            pdf.endOperation()
+        } catch (e: Exception) {
+            pdf.abandonOperation()
+            throw e
+        }
+        return currentEditState()
+    }
+
     private fun currentEditState(): EditState {
         val pdf = doc as? PDFDocument
         if (pdf == null || !journal) return EditState()
@@ -1093,3 +1126,6 @@ private fun pointArray(pdf: PDFDocument, xy: FloatArray, m: FloatArray) = pdf.ne
 }
 
 private fun fmt(f: Float): String = if (f == f.toInt().toFloat()) f.toInt().toString() else "%.4f".format(java.util.Locale.ROOT, f)
+
+private const val INFO_SUBJECT = "info:Subject"
+private const val INFO_KEYWORDS = "info:Keywords"

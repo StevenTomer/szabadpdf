@@ -37,6 +37,8 @@ import org.szabadpdf.feature.viewer.DocumentTab
 import org.szabadpdf.feature.viewer.TabsUi
 import org.szabadpdf.feature.viewer.ViewerScreen
 import org.szabadpdf.feature.viewer.ViewerViewModel
+import org.szabadpdf.core.pdf.LocalFiles
+import androidx.compose.runtime.remember
 
 class MainActivity : ComponentActivity() {
 
@@ -110,13 +112,40 @@ private fun App(
         openTabs.close(uri)
     }
 
-    fun show(uri: Uri) {
+    /**
+     * The way to reach [uri] that keeps working after the app restarts. Access lent by another
+     * app ("Open with") ends then, so such files are kept by their location on the device when
+     * SzabadPDF has file access, or else made permanent if the other app allows it.
+     */
+    fun durable(uri: Uri): Uri {
+        if (uri.scheme != "content") return uri
+        val resolver = context.contentResolver
+        if (resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }) return uri
+        LocalFiles.fileFor(context, uri)?.let { return Uri.fromFile(it) }
+        runCatching {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }.recoverCatching {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        return uri
+    }
+
+    fun show(original: Uri) {
+        val uri = durable(original)
+        if (uri != original) {
+            recents.replace(original, uri)
+            openTabs.replace(original, uri)
+        }
         organizer.discard()
         organizeFrom = -1
         recents.recordOpened(uri)
         openTabs.open(uri).forEach(::closeTab)
         home = false
     }
+
+    /** Start folder for Open PDFs ("" for the last one used), or null when it isn't showing. */
+    var browsing by rememberSaveable { mutableStateOf<String?>(null) }
+    val folderPrefs = remember { context.getSharedPreferences("open_pdfs", android.content.Context.MODE_PRIVATE) }
 
     /** Shows a document the user just picked. */
     fun showPicked(uri: Uri) {
@@ -211,7 +240,7 @@ private fun App(
         HomeScreen(
             openTabs = tabs.map { OpenTab(it, nameOf(it)) },
             recents = recentItems,
-            onOpenPicker = { picker.launch(arrayOf("application/pdf")) },
+            onOpenPicker = { browsing = "" },
             onScan = { scanning = true },
             onMerge = { mergePicker.launch(arrayOf("application/pdf")) },
             onOpenTab = { show(it) },
@@ -248,6 +277,16 @@ private fun App(
         val viewer = viewerFor(current)
         // Opens the document the first time its tab shows (also after the app was restarted).
         LaunchedEffect(current) {
+            // A file whose lent access has ended can often still be reached by its location.
+            if (current.scheme == "content" && !LocalFiles.canRead(context, current)) {
+                LocalFiles.fileFor(context, current)?.let { file ->
+                    val moved = Uri.fromFile(file)
+                    viewer.close(discardDraft = false)
+                    recents.replace(current, moved)
+                    openTabs.replace(current, moved)
+                    return@LaunchedEffect
+                }
+            }
             val entry = recents.get(current)
             viewer.open(current, entry?.name ?: "Document", entry?.lastPage ?: 0)
         }
@@ -280,10 +319,31 @@ private fun App(
                     onSelect = { id -> openTabs.select(Uri.parse(id)) },
                     onClose = { closeTab(current) },
                     onNew = { home = true },
-                    onOpen = ::showPicked,
+                    onOpen = { browsing = LocalFiles.fileFor(context, current)?.parent ?: "" },
+                    onForget = {
+                        recents.remove(current)
+                        closeTab(current)
+                    },
                     onMove = openTabs::move,
                 ),
             )
         }
+    }
+
+    browsing?.let { start ->
+        val startDir = start.ifEmpty { folderPrefs.getString("last_folder", null).orEmpty() }
+        OpenPdfsDialog(
+            start = startDir.takeIf { it.isNotEmpty() }?.let { java.io.File(it) },
+            onOpen = { files ->
+                browsing = null
+                files.firstOrNull()?.parent?.let { folderPrefs.edit().putString("last_folder", it).apply() }
+                files.forEach { show(Uri.fromFile(it)) }
+            },
+            onSystemPicker = {
+                browsing = null
+                picker.launch(arrayOf("application/pdf"))
+            },
+            onDismiss = { browsing = null },
+        )
     }
 }

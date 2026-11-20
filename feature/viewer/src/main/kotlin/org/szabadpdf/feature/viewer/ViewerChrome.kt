@@ -29,6 +29,8 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material.icons.filled.Compress
@@ -63,6 +65,8 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,8 +86,10 @@ class TabsUi(
     val onClose: () -> Unit,
     /** Opens another document. */
     val onNew: () -> Unit,
-    /** Opens [Uri] (picked with the viewer's Open button) in a tab. */
-    val onOpen: ((android.net.Uri) -> Unit)? = null,
+    /** Shows Open PDFs, starting in this document's folder. */
+    val onOpen: (() -> Unit)? = null,
+    /** Closes the active tab and forgets it in Recent (for files that can't be read any more). */
+    val onForget: (() -> Unit)? = null,
     /** Moves the tab [from] one position to [to]. */
     val onMove: ((from: Int, to: Int) -> Unit)? = null,
 )
@@ -96,7 +102,18 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
     val widths = remember { mutableMapOf<String, Int>() }
     val spacing = with(androidx.compose.ui.platform.LocalDensity.current) { 6.dp.toPx() }
     val currentTabs by androidx.compose.runtime.rememberUpdatedState(tabs.tabs)
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)) {
+    val scroll = rememberScrollState()
+    val positions = remember { mutableMapOf<String, Int>() }
+    // Keep the showing document's tab in view (e.g. one just opened at the end).
+    androidx.compose.runtime.LaunchedEffect(tabs.active, tabs.tabs.size) {
+        androidx.compose.runtime.withFrameNanos { } // after the strip is laid out
+        val x = positions[tabs.active] ?: return@LaunchedEffect
+        val width = widths[tabs.active] ?: 0
+        if (x < scroll.value || x + width > scroll.value + scroll.viewportSize) {
+            scroll.animateScrollTo((x - (scroll.viewportSize - width) / 2).coerceAtLeast(0))
+        }
+    }
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), contentColor = MaterialTheme.colorScheme.onSurface) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -107,7 +124,7 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
             Row(
                 Modifier
                     .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
+                    .horizontalScroll(scroll),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -121,6 +138,7 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
                         shadowElevation = if (dragged) 6.dp else 0.dp,
                         modifier = Modifier
                             .onSizeChanged { widths[tab.id] = it.width }
+                            .onPlaced { positions[tab.id] = it.positionInParent().x.toInt() }
                             .zIndex(if (dragged) 1f else 0f)
                             .graphicsLayer { translationX = if (dragged) drag.offset else 0f }
                             .then(
@@ -162,6 +180,8 @@ internal fun TabStrip(tabs: TabsUi, onClose: () -> Unit) {
 /** The ⋮ menu: contents, view options, and less common document tools. */
 @Composable
 internal fun MoreMenu(
+    buttonSize: androidx.compose.ui.unit.Dp,
+    onProperties: () -> Unit,
     paged: Boolean,
     canSave: Boolean,
     onContents: () -> Unit,
@@ -181,7 +201,7 @@ internal fun MoreMenu(
     }
     Box {
         Tip("More options") {
-            IconButton(onClick = { open = true }) { Icon(Icons.Filled.MoreVert, "More options") }
+            IconButton(onClick = { open = true }, modifier = Modifier.size(buttonSize)) { Icon(Icons.Filled.MoreVert, "More options") }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
@@ -189,6 +209,13 @@ internal fun MoreMenu(
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) },
                 onClick = pick(onContents),
             )
+            if (canSave) {
+                DropdownMenuItem(
+                    text = { Text("Document properties…") },
+                    leadingIcon = { Icon(Icons.Filled.Info, null) },
+                    onClick = pick(onProperties),
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Scroll continuously") },
                 leadingIcon = { Icon(Icons.Filled.ViewDay, null) },
@@ -282,7 +309,7 @@ internal fun ThumbnailStrip(
     androidx.compose.runtime.LaunchedEffect(current) { list.animateScrollToItem((current - 2).coerceAtLeast(0)) }
     val density = androidx.compose.ui.platform.LocalDensity.current
     val widthPx = with(density) { ThumbWidth.roundToPx() }
-    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), modifier = modifier.fillMaxWidth()) {
+    Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f), contentColor = MaterialTheme.colorScheme.onSurface, modifier = modifier.fillMaxWidth()) {
         androidx.compose.foundation.lazy.LazyRow(
             state = list,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -330,46 +357,51 @@ internal fun ThumbnailStrip(
 
 internal val ThumbWidth = 48.dp
 
-/** One of the document actions along the bottom: an icon with a short label under it. */
-private class DocAction(val label: String, val description: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
+/** A button in the viewer's top bar. */
+internal class BarAction(val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val onClick: () -> Unit)
 
-/** The main things to do with a document, one tap away: open, edit pages, scan, save as, print, share. */
+/**
+ * The viewer's top bar: back, the title when there's room, and every action as an icon (names
+ * show on hover or long press). On a narrow phone the buttons shrink a little to all fit.
+ */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-internal fun DocumentActions(
-    canEdit: Boolean,
-    onOpen: (() -> Unit)?,
-    onEdit: () -> Unit,
-    onScan: () -> Unit,
-    onSaveAs: () -> Unit,
-    onPrint: () -> Unit,
-    onShare: () -> Unit,
+internal fun ViewerTopBar(
+    title: String,
+    onBack: () -> Unit,
+    actions: List<BarAction>,
+    colors: androidx.compose.material3.TopAppBarColors,
+    more: @Composable (buttonSize: androidx.compose.ui.unit.Dp) -> Unit,
 ) {
-    val actions = buildList {
-        if (onOpen != null) add(DocAction("Open", "Open a PDF from this folder", Icons.Filled.FolderOpen, onOpen))
-        if (canEdit) {
-            add(DocAction("Edit", "Edit pages: reorder, rotate, delete, insert…", Icons.Filled.GridView, onEdit))
-            add(DocAction("Scan", "Scan pages into this document", Icons.Filled.DocumentScanner, onScan))
-            add(DocAction("Save as", "Save as…", Icons.Filled.SaveAs, onSaveAs))
-        }
-        add(DocAction("Print", "Print", Icons.Filled.Print, onPrint))
-        add(DocAction("Share", "Share", Icons.Filled.Share, onShare))
-    }
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        for (action in actions) {
-            Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                Tip(action.description) {
-                    androidx.compose.foundation.layout.Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable(onClickLabel = action.description, onClick = action.onClick)
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                    ) {
-                        Icon(action.icon, contentDescription = null)
-                        Text(action.label, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val count = actions.size + 2 // with back and the menu
+        val available = maxWidth - 8.dp
+        val button = (available / count).coerceIn(36.dp, 48.dp)
+        val titleRoom = available - button * count
+        androidx.compose.runtime.CompositionLocalProvider(
+            androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
+        ) {
+            androidx.compose.material3.TopAppBar(
+                title = {
+                    if (titleRoom >= 96.dp) Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                navigationIcon = {
+                    Tip("Back") {
+                        IconButton(onClick = onBack, modifier = Modifier.size(button)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
+                        }
                     }
-                }
-            }
+                },
+                actions = {
+                    for (action in actions) {
+                        Tip(action.label) {
+                            IconButton(onClick = action.onClick, modifier = Modifier.size(button)) { Icon(action.icon, action.label) }
+                        }
+                    }
+                    more(button)
+                },
+                colors = colors,
+            )
         }
     }
 }

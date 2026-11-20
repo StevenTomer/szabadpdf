@@ -226,4 +226,19 @@ class AnnotateTest {
         assertNotEquals(Color.WHITE, bitmap.getPixel(100, 550))
         assertEquals(Color.WHITE, bitmap.getPixel(200, 550))
     }
+
+    @Test
+    fun editsDocumentProperties() = runBlocking {
+        assertEquals("SzabadPDF sample", doc.properties().title)
+        val state = doc.setProperties(DocumentProperties(title = "Meeting notes", author = "Me", subject = "Plans"))
+        assertTrue(state.canUndo)
+        assertEquals("Meeting notes", doc.title())
+        doc.saveTo(context, Uri.fromFile(file))
+        doc.close()
+        doc = PdfDocument.open(context, Uri.fromFile(file))
+        assertEquals(DocumentProperties("Meeting notes", "Me", "Plans", ""), doc.properties())
+        doc.setProperties(DocumentProperties(title = "Changed"))
+        doc.undo()
+        assertEquals("Meeting notes", doc.title())
+    }
 }

@@ -54,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -265,6 +266,9 @@ private fun WidthRow(widths: List<Float>, style: InkStyle, onSelect: (Float) -> 
             Box(
                 Modifier
                     .size(width = 56.dp, height = 36.dp)
+                    // Ink as it looks on paper, whatever the theme (black ink on a dark sheet vanished).
+                    .background(Color.White, RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .border(
                         if (isSelected) 3.dp else 1.dp,
                         if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
@@ -585,4 +589,59 @@ private fun shapeIcon(kind: ShapeKind): ImageVector = when (kind) {
     ShapeKind.ELLIPSE -> Icons.Filled.PanoramaFishEye
     ShapeKind.LINE -> Icons.Filled.Remove
     ShapeKind.ARROW -> Icons.AutoMirrored.Filled.ArrowForward
+}
+
+/** The document's title, author, subject and keywords, to read and change. */
+@Composable
+internal fun PropertiesDialog(
+    load: suspend () -> org.szabadpdf.core.pdf.DocumentProperties?,
+    onSave: (org.szabadpdf.core.pdf.DocumentProperties) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var loaded by remember { mutableStateOf<org.szabadpdf.core.pdf.DocumentProperties?>(null) }
+    var title by remember { mutableStateOf("") }
+    var author by remember { mutableStateOf("") }
+    var subject by remember { mutableStateOf("") }
+    var keywords by remember { mutableStateOf("") }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        val p = load() ?: org.szabadpdf.core.pdf.DocumentProperties()
+        title = p.title
+        author = p.author
+        subject = p.subject
+        keywords = p.keywords
+        loaded = p
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Document properties") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Stored inside the PDF. The title is what PDF readers show at the top instead of the file name.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                for ((label, value, set) in listOf(
+                    Triple("Title", title) { v: String -> title = v },
+                    Triple("Author", author) { v: String -> author = v },
+                    Triple("Subject", subject) { v: String -> subject = v },
+                    Triple("Keywords", keywords) { v: String -> keywords = v },
+                )) {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = value,
+                        onValueChange = set,
+                        label = { Text(label) },
+                        singleLine = true,
+                        enabled = loaded != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            val changed = org.szabadpdf.core.pdf.DocumentProperties(title, author, subject, keywords)
+            TextButton(onClick = { onSave(changed) }, enabled = loaded != null && loaded != changed) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

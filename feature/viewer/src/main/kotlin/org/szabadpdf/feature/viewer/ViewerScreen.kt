@@ -48,6 +48,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.SaveAs
+import androidx.compose.material.icons.filled.Print
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
@@ -126,7 +132,7 @@ fun ViewerScreen(
         ViewerState.Idle, ViewerState.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator()
         }
-        is ViewerState.Error -> ErrorScreen(s.message, onBack)
+        is ViewerState.Error -> ErrorScreen(s, onBack, tabs)
         is ViewerState.NeedsPassword -> PasswordDialog(s.wrongPassword, viewModel::submitPassword, onBack)
         is ViewerState.Ready -> key(s.document.uri) {
             DocumentScreen(s.document, viewModel, onBack, onPageChanged, onOrganize, onSavedAs, tabs, onScanInto)
@@ -176,6 +182,7 @@ private fun DocumentScreen(
     var showStyle by rememberSaveable { mutableStateOf(false) }
     var showProtect by rememberSaveable { mutableStateOf(false) }
     var showPad by rememberSaveable { mutableStateOf(false) }
+    var showProperties by rememberSaveable { mutableStateOf(false) }
     /** Where a text box is being typed. */
     var newTextBox by remember { mutableStateOf<NewNote?>(null) }
     /** The text field or dropdown being filled in. */
@@ -228,9 +235,6 @@ private fun DocumentScreen(
             }
         }
     }
-
-    // Open: the file picker starts in this document's folder.
-    val openHere = rememberLauncherForActivityResult(OpenPdfFrom()) { uri -> uri?.let { tabs?.onOpen?.invoke(it) } }
 
     // Save as / save a copy: the new file then opens (in place of this one) in the viewer.
     val copyPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -540,24 +544,36 @@ private fun DocumentScreen(
                     colors = barColors,
                 )
                 else -> Column {
-                    TopAppBar(
-                        title = { Text(info.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        navigationIcon = {
-                            Tip("Back") {
-                                IconButton(onClick = ::leave) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-                            }
-                        },
-                        actions = {
-                            if (annotate.dirty) Tip("Save") { IconButton(onClick = { save() }) { Icon(Icons.Filled.Save, "Save") } }
-                            Tip("Search") {
-                                IconButton(onClick = { searchOpen = true }) { Icon(Icons.Filled.Search, "Search") }
-                            }
-                            if (annotate.editable) {
-                                Tip("Annotate") {
-                                    IconButton(onClick = { viewModel.setAnnotating(true) }) { Icon(Icons.Filled.Draw, "Annotate") }
-                                }
-                            }
+                    val canEdit = annotate.editable && onOrganize != null
+                    val barActions = buildList {
+                        if (annotate.dirty) add(BarAction("Save", Icons.Filled.Save) { save() })
+                        add(BarAction("Search", Icons.Filled.Search) { searchOpen = true })
+                        if (annotate.editable) add(BarAction("Annotate", Icons.Filled.Draw) { viewModel.setAnnotating(true) })
+                        tabs?.onOpen?.let { add(BarAction("Open PDFs", Icons.Filled.FolderOpen, it)) }
+                        if (canEdit) {
+                            add(BarAction("Edit pages", Icons.Filled.GridView) {
+                                if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
+                                else onOrganize?.invoke(currentPage)
+                            })
+                            add(BarAction("Scan pages into this document", Icons.Filled.DocumentScanner) {
+                                // Like editing pages, this rewrites the file: unsaved annotations first.
+                                if (annotate.dirty) unsavedPrompt = { onScanInto?.invoke(currentPage) ?: Unit } to false
+                                else onScanInto?.invoke(currentPage)
+                            })
+                        }
+                        if (annotate.editable) add(BarAction("Save as…", Icons.Filled.SaveAs) { copyPicker.launch(info.name) })
+                        add(BarAction("Print", Icons.Filled.Print) { print() })
+                        add(BarAction("Share", Icons.Filled.Share) { share() })
+                    }
+                    ViewerTopBar(
+                        title = info.title,
+                        onBack = ::leave,
+                        actions = barActions,
+                        colors = barColors,
+                    ) { buttonSize ->
                             MoreMenu(
+                                buttonSize = buttonSize,
+                                onProperties = { showProperties = true },
                                 paged = paged,
                                 canSave = annotate.editable,
                                 onContents = { showOutline = true },
@@ -570,9 +586,7 @@ private fun DocumentScreen(
                                 onCompress = viewModel::compress,
                                 onRecognize = viewModel::recognizeText,
                             )
-                        },
-                        colors = barColors,
-                    )
+                    }
                     if (showTabs) TabStrip(tabs!!, onClose = {
                         if (annotate.dirty) unsavedPrompt = tabs.onClose to true else tabs.onClose()
                     })
@@ -580,44 +594,22 @@ private fun DocumentScreen(
             }
         }
 
-        val bottomShown = showChrome && !annotate.active && !searchOpen && selection == null
-        val stripShown = showThumbnails && pageCount > 1
+        val stripShown = showThumbnails && pageCount > 1 && showChrome && !annotate.active && !searchOpen && selection == null
         AnimatedVisibility(
-            visible = bottomShown,
+            visible = stripShown,
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)) {
-                Column(Modifier.navigationBarsPadding()) {
-                    if (stripShown) {
-                        ThumbnailStrip(
-                            pageSizes = info.pageSizes,
-                            current = currentPage,
-                            source = viewModel,
-                            versions = versions,
-                            night = night,
-                            onSelect = { goTo(it) },
-                        )
-                    }
-                    DocumentActions(
-                        canEdit = annotate.editable && onOrganize != null,
-                        onOpen = tabs?.onOpen?.let { { openHere.launch(viewModel.documentUri) } },
-                        onEdit = {
-                            if (annotate.dirty) unsavedPrompt = { onOrganize?.invoke(currentPage) ?: Unit } to false
-                            else onOrganize?.invoke(currentPage)
-                        },
-                        onScan = {
-                            // Like editing pages, this rewrites the file: unsaved annotations first.
-                            if (annotate.dirty) unsavedPrompt = { onScanInto?.invoke(currentPage) ?: Unit } to false
-                            else onScanInto?.invoke(currentPage)
-                        },
-                        onSaveAs = { copyPicker.launch(info.name) },
-                        onPrint = { print() },
-                        onShare = { share() },
-                    )
-                }
-            }
+            ThumbnailStrip(
+                pageSizes = info.pageSizes,
+                current = currentPage,
+                source = viewModel,
+                versions = versions,
+                night = night,
+                onSelect = { goTo(it) },
+                modifier = Modifier.navigationBarsPadding(),
+            )
         }
 
         AnimatedVisibility(
@@ -652,7 +644,7 @@ private fun DocumentScreen(
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
                 .padding(16.dp)
-                .padding(bottom = if (annotate.active) 64.dp else if (bottomShown) (if (stripShown) 92.dp else 0.dp) + 60.dp else 0.dp),
+                .padding(bottom = if (annotate.active) 64.dp else if (stripShown) 92.dp else 0.dp),
         ) {
             Surface(
                 shape = MaterialTheme.shapes.extraLarge,
@@ -724,6 +716,17 @@ private fun DocumentScreen(
             },
             onDelete = null,
             onDismiss = { newNote = null },
+        )
+    }
+
+    if (showProperties) {
+        PropertiesDialog(
+            load = viewModel::properties,
+            onSave = {
+                showProperties = false
+                viewModel.setProperties(it)
+            },
+            onDismiss = { showProperties = false },
         )
     }
 
@@ -1045,7 +1048,7 @@ private fun PasswordDialog(wrongPassword: Boolean, onSubmit: (String) -> Unit, o
 }
 
 @Composable
-private fun ErrorScreen(message: String, onBack: () -> Unit) {
+private fun ErrorScreen(error: ViewerState.Error, onBack: () -> Unit, tabs: TabsUi?) {
     Column(
         Modifier
             .fillMaxSize()
@@ -1053,8 +1056,25 @@ private fun ErrorScreen(message: String, onBack: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("Couldn't open this document", style = MaterialTheme.typography.titleLarge)
-        Text(message, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 16.dp))
+        Text(
+            if (error.noAccess) "SzabadPDF can't read this file any more" else "Couldn't open this document",
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Text(
+            if (error.noAccess) {
+                "It was opened from another app, which only lent access until SzabadPDF restarted " +
+                    "(for example after an update). Open it again with Open PDFs; once SzabadPDF has file access, " +
+                    "files opened from other apps stay available."
+            } else error.message,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(vertical = 16.dp),
+        )
+        if (error.noAccess && tabs?.onOpen != null) {
+            androidx.compose.material3.Button(onClick = tabs.onOpen) { Text("Open PDFs…") }
+        }
+        if (tabs?.onForget != null) {
+            TextButton(onClick = tabs.onForget) { Text("Close and remove from Recent") }
+        }
         TextButton(onClick = onBack) { Text("Back") }
     }
 }
@@ -1065,16 +1085,4 @@ private fun openExternal(context: android.content.Context, uri: String) {
     } catch (_: ActivityNotFoundException) {
         // Nothing can open it; ignore.
     }
-}
-
-/** Picks a PDF, starting in the folder of the given document (where the picker allows it). */
-private class OpenPdfFrom : androidx.activity.result.contract.ActivityResultContract<Uri?, Uri?>() {
-    override fun createIntent(context: android.content.Context, input: Uri?) =
-        Intent(Intent.ACTION_OPEN_DOCUMENT)
-            .addCategory(Intent.CATEGORY_OPENABLE)
-            .setType("application/pdf")
-            .apply { if (input != null && input.scheme == "content") putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, input) }
-
-    override fun parseResult(resultCode: Int, intent: Intent?): Uri? =
-        intent?.data.takeIf { resultCode == android.app.Activity.RESULT_OK }
 }
