@@ -687,6 +687,61 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
         }
     }
 
+    // --- recognizing text ---------------------------------------------------------------------
+
+    /**
+     * Reads the text on pages that are only pictures (OCR) and lays it over them invisibly, so
+     * they can be searched and their text selected. One undo step for the whole run.
+     */
+    fun recognizeText() {
+        val doc = document ?: return
+        if (_annotate.value.saving) return
+        _annotate.update { it.copy(saving = true, working = "Looking for pages without text…") }
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val recognizer = org.szabadpdf.core.scan.TextRecognizer(app)
+            try {
+                val pages = (0 until doc.pageCount).filter { !doc.hasText(it) }
+                if (pages.isEmpty()) {
+                    _events.send(ViewerEvent.Message("Every page already has text"))
+                    return@launch
+                }
+                val group = "Recognize#${System.nanoTime()}"
+                var found = 0
+                pages.forEachIndexed { n, page ->
+                    _annotate.update { it.copy(working = "Reading text… page ${n + 1} of ${pages.size}") }
+                    val size = doc.pageSizes[page]
+                    val width = (RECOGNIZE_SIDE * size.width / maxOf(size.width, size.height)).toInt()
+                    val render = doc.renderPage(page, width)
+                    val words = try {
+                        recognizer.recognize(render).map {
+                            org.szabadpdf.core.pdf.OcrWord(it.text, it.left, it.top, it.right, it.bottom, it.lineHeight, it.lineBottom)
+                        }
+                    } finally {
+                        render.recycle()
+                    }
+                    if (words.isNotEmpty()) {
+                        setEdits(doc.addTextLayer(app, page, words, width, group))
+                        found++
+                    }
+                }
+                _events.send(
+                    ViewerEvent.Message(
+                        if (found == 0) "No text found on the ${pages.size} page${if (pages.size == 1) "" else "s"} without it"
+                        else "Recognized text on $found page${if (found == 1) "" else "s"}. Save to keep it.",
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                report("Couldn't recognize the text", e)
+            } finally {
+                recognizer.close()
+                _annotate.update { it.copy(saving = false, working = null) }
+            }
+        }
+    }
+
     // --- reducing file size ------------------------------------------------------------------
 
     /** A compressed copy, waiting for the user to keep it (or not). */
@@ -837,5 +892,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application),
     private companion object {
         const val KEY_STYLUS_SEEN = "stylus_seen"
         const val KEY_PAGED = "paged"
+
+        /** Longest side of the page renders text is read from: about 300 dpi for A4. */
+        const val RECOGNIZE_SIDE = 3000f
     }
 }

@@ -519,6 +519,7 @@ private fun DocumentScreen(
                                 onPrint = { print() },
                                 onPassword = { showProtect = true },
                                 onCompress = viewModel::compress,
+                                onRecognize = viewModel::recognizeText,
                             )
                         },
                         colors = barColors,

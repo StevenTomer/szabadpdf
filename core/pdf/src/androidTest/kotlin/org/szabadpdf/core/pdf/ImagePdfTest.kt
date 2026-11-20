@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -97,6 +98,42 @@ class ImagePdfTest {
             assertEquals(1, doc.pageCount)
             val page = doc.renderPage(0, 300)
             assertTrue("still the light photo", Color.red(page.getPixel(150, 200)) > 150)
+        } finally {
+            doc.close()
+        }
+    }
+
+    @Test
+    fun textLayerOnExistingPages() = runBlocking {
+        // An image-only page (no text), then that same page turned a quarter.
+        val image = image("plain.jpg", 1000, 1400, Bitmap.CompressFormat.JPEG)
+        val made = File(context.cacheDir, "plain.pdf").apply { delete() }
+        ImagePdf.write(context, listOf(image), made)
+        val turned = File(context.cacheDir, "plain-turned.pdf").apply { delete() }
+        PdfDocument.open(context, Uri.fromFile(made)).let { d ->
+            d.saveRearranged(listOf(PageSpec.Existing(0), PageSpec.Existing(0, from = PdfDocument.open(context, Uri.fromFile(made)), rotation = 90)), turned)
+            d.close()
+        }
+        val doc = PdfDocument.open(context, Uri.fromFile(turned))
+        try {
+            assertFalse(doc.hasText(0))
+            for (page in 0..1) {
+                val size = doc.pageSizes[page]
+                // Pretend OCR on a 1000-pixel-wide render found a word 30% across, 20% down.
+                val w = 1000
+                val h = (w * size.height / size.width).toInt()
+                val word = OcrWord("Szabad", (0.3f * w).toInt(), (0.2f * h).toInt(), (0.5f * w).toInt(), (0.2f * h + 40).toInt(), 40, (0.2f * h + 40).toInt())
+                doc.addTextLayer(context, page, listOf(word), w, "test")
+                val hit = doc.search(page, "szabad").single().first()
+                val k = size.width / w
+                assertEquals("page $page left", 0.3f * w * k, hit.left, 4f)
+                assertEquals("page $page right", 0.5f * w * k, hit.right, 4f)
+                assertTrue("page $page height", hit.bottom > hit.top)
+            }
+            assertTrue(doc.hasText(0))
+            doc.undo() // both pages were one group
+            assertFalse(doc.hasText(0))
+            assertFalse(doc.hasText(1))
         } finally {
             doc.close()
         }

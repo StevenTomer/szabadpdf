@@ -338,6 +338,47 @@ class PdfDocument private constructor(
         }
     }
 
+    // --- recognizing text on existing pages -------------------------------------------------
+
+    /** Whether page [index] has any text (pages that are only a picture have none). */
+    suspend fun hasText(index: Int): Boolean = onEngine { text(index).asText().any { !it.isWhitespace() } }
+
+    /**
+     * Lays [words], read by OCR from a render of page [index] that was [imageWidth] pixels wide,
+     * over the page as invisible text. Calls with the same [group] undo together.
+     */
+    suspend fun addTextLayer(context: Context, index: Int, words: List<OcrWord>, imageWidth: Int, group: String): EditState =
+        onEngine {
+            if (words.isEmpty()) return@onEngine currentEditState()
+            val pdf = doc as? PDFDocument ?: throw UnsupportedOperationException("Only PDF files can be edited")
+            val b = bounds[index]
+            val scale = (b.x1 - b.x0) / imageWidth
+            edit(index, "Recognize text", group) { page ->
+                // Rendered pixels -> page space (y down) -> the page's own coordinates.
+                val toUser = page.transform.invert()
+                val text = OcrText.operators(words) { x, y ->
+                    val p = Point(b.x0 + x * scale, b.y0 + y * scale).transform(toUser)
+                    p.x to p.y
+                }
+                val pageObj = page.`object`
+                val resources = pageObj.getInheritable("Resources").let { found ->
+                    if (found.isNull) pdf.newDictionary().also { pageObj.put("Resources", it) } else found
+                }
+                val fonts = resources.get("Font").let { found ->
+                    if (found.isNull) pdf.newDictionary().also { resources.put("Font", it) } else found
+                }
+                fonts.put(OcrText.FONT_KEY, OcrText.font(pdf, context))
+                // Wrapped in q/Q so whatever state the page's own content leaves can't move it.
+                val contents = pageObj.get("Contents")
+                val all = pdf.newArray()
+                all.push(pdf.addStream("q\n"))
+                if (contents.size() > 0) for (i in 0 until contents.size()) all.push(contents.get(i))
+                else if (!contents.isNull) all.push(contents)
+                all.push(pdf.addStream("Q\n" + text))
+                pageObj.put("Contents", all)
+            }
+        }
+
     // --- forms -----------------------------------------------------------------------------
 
     /** The form fields on page [index] (none for pages, or documents, without a form). */
