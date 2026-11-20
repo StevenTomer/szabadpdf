@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -34,17 +35,26 @@ import androidx.compose.ui.unit.dp
 fun HomeScreen(
     recents: List<RecentFile>,
     onOpenPicker: () -> Unit,
+    onScan: () -> Unit,
     onOpenRecent: (RecentFile) -> Unit,
     onRemoveRecent: (RecentFile) -> Unit,
 ) {
     Scaffold(
         topBar = { TopAppBar(title = { Text("SzabadPDF") }) },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = onOpenPicker,
-                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                text = { Text("Open PDF") },
-            )
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                ExtendedFloatingActionButton(
+                    onClick = onScan,
+                    icon = { Icon(Icons.Filled.DocumentScanner, contentDescription = null) },
+                    text = { Text("Scan") },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                )
+                ExtendedFloatingActionButton(
+                    onClick = onOpenPicker,
+                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                    text = { Text("Open PDF") },
+                )
+            }
         },
     ) { padding ->
         if (recents.isEmpty()) {
@@ -58,7 +68,8 @@ fun HomeScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("No documents yet", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "Open a PDF from your phone or a cloud drive, or choose SzabadPDF when opening a PDF in another app.",
+                        "Open a PDF from your phone or a cloud drive, scan a paper document with the camera, " +
+                            "or choose SzabadPDF when opening a PDF in another app.",
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -66,7 +77,7 @@ fun HomeScreen(
                 }
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 96.dp)) {
+            LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 168.dp)) {
                 item {
                     Text(
                         "Recent",

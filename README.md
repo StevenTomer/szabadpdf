@@ -40,10 +40,13 @@ feature/viewer/       continuous scrolling, zoom, search, table of contents, go 
                       annotating: pen and highlighter ink (stylus-aware), text selection, highlight/
                       underline/strikeout, sticky notes, eraser, undo/redo, saving
 feature/organize/     page grid: drag to reorder, rotate, delete, insert blank pages or other PDFs
+core/scan/            document detection and cleanup: FairScan's image processing (copied unchanged,
+                      see core/scan/README.md) and segmentation model, behind DocumentScanner
+feature/scan/         camera with live page outline, photo import, review (crop, rotate, colour,
+                      reorder, delete) and saving as PDF
 testdata/             source for the test PDF used by core/pdf's instrumented tests
 ```
 
-Planned: `feature/scan/` (camera to PDF, behind a swappable interface).
 
 ## Building
 
@@ -52,10 +55,14 @@ Requires JDK 21 and the Android SDK (platform 37.2).
 ```sh
 ./gradlew assembleDebug                         # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew installDebug                          # install on a connected device or emulator
-./gradlew :core:pdf:connectedDebugAndroidTest   # engine tests (need a device or emulator)
+./gradlew :core:pdf:connectedDebugAndroidTest :core:scan:connectedDebugAndroidTest
+                                                # engine and scanner tests (need a device or emulator)
 ```
 
-The debug build installs as "org.szabadpdf.debug", alongside any release build.
+The debug build installs as "org.szabadpdf.debug", alongside any release build. Builds produce one
+APK per processor type (arm64-v8a, armeabi-v7a, x86_64, x86), since the native libraries (MuPDF,
+OpenCV, LiteRT) are large. The first build downloads the scanner's segmentation model from GitHub
+and checks its SHA-256.
 
 ## Roadmap
 
@@ -68,7 +75,8 @@ The debug build installs as "org.szabadpdf.debug", alongside any release build.
    highlight/underline/strikeout, sticky notes, eraser, undo/redo. Annotations are standard PDF
    annotations, so other readers show them; saving appends to the original file when possible,
    which keeps existing digital signatures valid)
-4. Scanner
+4. Scanner (done: live page detection, automatic crop, perspective correction and cleanup, colour /
+   greyscale / black-and-white, manual corner adjustment, import from photos, save as PDF)
 5. Forms, signatures, sync
 
 ## License

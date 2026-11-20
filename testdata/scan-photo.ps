@@ -1,0 +1,21 @@
+%!PS
+% A stand-in for a phone photo of a document: a white page with text, turned 8 degrees,
+% lying on a dark desk. Rendered to core/scan/src/androidTest/assets/photo.jpg.
+<< /PageSize [1200 1600] >> setpagedevice
+0.30 0.25 0.20 setrgbcolor 0 0 1200 1600 rectfill
+% some desk texture
+0.26 0.21 0.17 setrgbcolor
+0 40 1600 { 0 exch 1200 12 rectfill } for
+600 800 translate 8 rotate
+% soft shadow, then the page
+0.18 0.15 0.12 setrgbcolor -340 -490 700 950 rectfill
+0.97 0.97 0.95 setrgbcolor -350 -475 700 950 rectfill
+0.1 setgray
+/Helvetica-Bold findfont 44 scalefont setfont -290 380 moveto (Meeting notes) show
+/Helvetica findfont 22 scalefont setfont
+/y 320 def
+18 {
+  -290 y moveto (The quick brown fox jumps over the lazy dog again.) show
+  /y y 34 sub def
+} repeat
+showpage

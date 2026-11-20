@@ -21,6 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import org.szabadpdf.feature.organize.OrganizeScreen
 import org.szabadpdf.feature.organize.OrganizeViewModel
+import org.szabadpdf.feature.scan.ScanScreen
+import org.szabadpdf.feature.scan.ScanViewModel
 import org.szabadpdf.feature.viewer.ViewerScreen
 import org.szabadpdf.feature.viewer.ViewerViewModel
 
@@ -28,6 +30,7 @@ class MainActivity : ComponentActivity() {
 
     private val viewer: ViewerViewModel by viewModels()
     private val organizer: OrganizeViewModel by viewModels()
+    private val scanner: ScanViewModel by viewModels()
     private lateinit var recents: RecentFiles
 
     /** A document handed to us by another app, waiting to be shown. */
@@ -45,6 +48,7 @@ class MainActivity : ComponentActivity() {
                 App(
                     viewer = viewer,
                     organizer = organizer,
+                    scanner = scanner,
                     recents = recents,
                     incoming = incoming,
                     onIncomingHandled = { incoming = null },
@@ -60,6 +64,7 @@ class MainActivity : ComponentActivity() {
 private fun App(
     viewer: ViewerViewModel,
     organizer: OrganizeViewModel,
+    scanner: ScanViewModel,
     recents: RecentFiles,
     incoming: Uri?,
     onIncomingHandled: () -> Unit,
@@ -68,6 +73,7 @@ private fun App(
     var openUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     /** Page to start the organize grid at, or -1 when not organizing. */
     var organizeFrom by rememberSaveable { mutableIntStateOf(-1) }
+    var scanning by rememberSaveable { mutableStateOf(false) }
 
     fun show(uri: Uri) {
         organizer.discard()
@@ -117,11 +123,21 @@ private fun App(
     }
 
     val current = openUri
-    if (current == null) {
+    if (scanning) {
+        ScanScreen(
+            viewModel = scanner,
+            onSaved = { uri ->
+                scanning = false
+                show(uri)
+            },
+            onClose = { scanning = false },
+        )
+    } else if (current == null) {
         val items by recents.items.collectAsState()
         HomeScreen(
             recents = items,
             onOpenPicker = { picker.launch(arrayOf("application/pdf")) },
+            onScan = { scanning = true },
             onOpenRecent = { show(it.uri) },
             onRemoveRecent = { recents.remove(it.uri) },
         )
